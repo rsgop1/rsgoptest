@@ -5,3 +5,5 @@ export * from "./user-history";
 export * from "./wrong-questions";
 export * from "./global-config";
 export * from "./purchased-tests";
+export * from "./flash-sales";
+export * from "./challenges";

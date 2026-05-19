@@ -185,7 +185,7 @@ router.get("/payments", requireAuth, async (_req, res) => {
 router.get("/payment-image/:fileId", requireAuth, async (req, res) => {
   try {
     const api = getApi();
-    const file = await api.getFile(req.params["fileId"]!);
+    const file = await api.getFile(String(req.params["fileId"]));
     const token = process.env["TELEGRAM_BOT_TOKEN"]!;
     const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
     const response = await fetch(url);
@@ -204,7 +204,7 @@ router.post("/payments/approve/:paymentId", requireAuth, async (req, res) => {
     const [payment] = await db
       .select()
       .from(paymentsTable)
-      .where(eq(paymentsTable.paymentId, req.params["paymentId"]!))
+      .where(eq(paymentsTable.paymentId, String(req.params["paymentId"])))
       .limit(1);
 
     if (!payment) { res.redirect("/admin/payments"); return; }
@@ -240,7 +240,7 @@ router.post("/payments/reject/:paymentId", requireAuth, async (req, res) => {
     const [payment] = await db
       .select()
       .from(paymentsTable)
-      .where(eq(paymentsTable.paymentId, req.params["paymentId"]!))
+      .where(eq(paymentsTable.paymentId, String(req.params["paymentId"])))
       .limit(1);
 
     if (payment) {

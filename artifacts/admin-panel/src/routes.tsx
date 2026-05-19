@@ -1,0 +1,43 @@
+import { Switch, Route, Redirect } from "wouter";
+import { Layout } from "./components/layout";
+import Login from "./pages/login";
+import Dashboard from "./pages/dashboard";
+import Payments from "./pages/payments";
+import Tests from "./pages/tests";
+import FlashSales from "./pages/flash-sales";
+import Settings from "./pages/settings";
+import Users from "./pages/users";
+
+function AppRoutes() {
+  return (
+    <Switch>
+      <Route path="/login" component={Login} />
+      <Route path="/">
+        <Redirect to="/dashboard" />
+      </Route>
+      <Route path="/dashboard">
+        <Layout><Dashboard /></Layout>
+      </Route>
+      <Route path="/payments">
+        <Layout><Payments /></Layout>
+      </Route>
+      <Route path="/tests">
+        <Layout><Tests /></Layout>
+      </Route>
+      <Route path="/flash-sales">
+        <Layout><FlashSales /></Layout>
+      </Route>
+      <Route path="/users">
+        <Layout><Users /></Layout>
+      </Route>
+      <Route path="/settings">
+        <Layout><Settings /></Layout>
+      </Route>
+      <Route>
+        <Layout><div className="flex items-center justify-center h-[50vh] text-2xl font-bold text-muted-foreground">Page Not Found</div></Layout>
+      </Route>
+    </Switch>
+  );
+}
+
+export default AppRoutes;
