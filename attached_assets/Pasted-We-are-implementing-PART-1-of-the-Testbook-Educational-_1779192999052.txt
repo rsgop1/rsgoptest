@@ -1,0 +1,382 @@
+We are implementing PART 1 of the "Testbook+" Educational Hub Bot. 
+Stack: Python (python-telegram-bot v20.x), MongoDB (or Motor for async handling), and FastAPI for core web orchestration.
+
+Implement the exact database structures, indexing strategy, state handlers, and inline onboarding steps below. The code must be asynchronous, production-ready, highly modularized, and cleanly structured.
+
+---
+
+### 🗄️ 1. DATABASE MODELS & INITIALIZATION (MongoDB Schema)
+
+Define the database configuration layer using Motor/PyMongo. Implement indexes on critical fields like `user_id`, `target_exam`, and `test_id` to guarantee ultra-low latency queries.
+
+#### Collection: users
+{
+  "_id": "ObjectId",
+  "user_id": 123456789,             // Telegram User ID (Unique Index)
+  "username": "username_string",
+  "full_name": "First Last",
+  "tier": "Free",                  // "Free" or "Premium"
+  "premium_expiry": null,          // datetime object or null
+  "target_exam": {
+    "main_category": "string",     // e.g., "SSC Exams"
+    "sub_category": "string"       // e.g., "SSC Stenographer"
+  },
+  "accuracy_rate": 0.00,           // Float tracking cumulative score performance
+  "total_tests_taken": 0,          // Total mocks completed
+  "joined_at": "datetime"          // User onboarding timestamp
+}
+
+#### Collection: test_series
+{
+  "_id": "ObjectId",
+  "test_id": "STENO_MOCK_01",       // Unique Test Identifier Index
+  "test_name": "string",           // e.g., "SSC Stenographer 2026: Mega Mock 01"
+  "main_category": "string",
+  "sub_category": "string",
+  "positive_marking": 1.00,        // Score added per correct option
+  "negative_marking": 0.25,        // Score deducted per wrong option
+  "price_in_inr": 49,              // Pricing for UPI payment module
+  "price_in_stars": 50,            // Pricing for Telegram Stars billing invoice
+  "questions_data": "array"        // Array parsing target JSON quiz schema elements
+}
+
+#### Collection: payments
+{
+  "_id": "ObjectId",
+  "payment_id": "string",
+  "user_id": 123456789,            // Index linked to user account
+  "method": "string",              // "UPI" or "TG_Stars"
+  "amount": 49,
+  "screenshot_file_id": "string",  // Telegram file id for manual web-approval queue (UPI only)
+  "status": "Pending",             // "Pending", "Approved", "Rejected"
+  "submitted_at": "datetime"
+}
+
+---
+
+### 📱 2. TELEGRAM STATE HANDLER & MULTI-TIER ONBOARDING FLOW
+
+Implement an asynchronous state handling wrapper using standard python-telegram-bot handlers (`ConversationHandler` or clean custom string callbacks). 
+
+#### Step A: The Entry Gate (`/start`)
+- Intercept the incoming message. Check if the user exists within the `users` collection.
+- If the user exists, pull their `target_exam.sub_category` from the DB and route them instantly to the core dashboard view.
+- If the user is new, build a dynamic database record using their telemetry (`user_id`, `username`, `full_name`) setting default metrics (`tier`: "Free", `target_exam`: null).
+- Dispatch an elegant, high-impact introductory card: 
+  *"Welcome to Testbook+ Engine! 🚀\nAapki exam preparation ko automate aur premium banane ke liye design kiya gaya hai.\n\n👇 Pehle niche se apni main category chunein:"*
+- Append these structural Inline Keyboards:
+  `[🏆 SSC Exams]` `[🚆 Railway Exams]`
+  `[🏢 Banking Exams]` `[🗺️ Bihar Govt Exams]`
+
+#### Step B: Deep Onboarding Nesting (Dynamic Callback Query Routing)
+Write logic that catches the category string dynamically and updates the current message interface via `edit_message_text` with specialized internal sub-categories:
+
+1. **If '🏆 SSC Exams' is tapped:**
+   Render buttons:
+   `[🎙️ SSC Stenographer]` | `[🎩 SSC CGL]`
+   `[📝 SSC CHSL]` | `[🎯 SSC MTS]`
+   `[🎖️ SSC Selection Post]` | `[👮 SSC GD Constable]`
+
+2. **If '🗺️ Bihar Govt Exams' is tapped:**
+   Render buttons:
+   `[⚡ BTSC (Instructor/Technical)]` | `[🏛️ BSSC Inter Level]`
+   `[👮 Bihar Police SI / Constable]` | `[📚 BPSC (Pre)]`
+
+3. **If '🚆 Railway Exams' is tapped:**
+   Render buttons:
+   `[🛠️ RRB ALP / Technician]` | `[🔥 RRB NTPC]`
+   `[📦 RRC Group D]` | `[👮 RPF SI]`
+
+4. **If '🏢 Banking Exams' is tapped:**
+   Render buttons:
+   `[🏦 IBPS PO / Clerk]` | `[🦁 SBI PO / Clerk]`
+
+---
+
+### 💾 3. STATE LOCK & CONFIGURATION MANAGER
+
+- Once the user selects their absolute sub-category (e.g., clicking `[🎙️ SSC Stenographer]`), fire an asynchronous database execution to update `target_exam.main_category` and `target_exam.sub_category` under their explicit `user_id`.
+- Clear the inline keyboard layout and present the locked configuration confirmation status page:
+  *"✅ Profile Complete! Aapka target set ho gaya hai: **{sub_category}**.\n\nAb aap is exam se jude saare premium resources, high-level mock test engines aur detailed solutions use kar sakte hain.\n\nUse `/test_series` to check live mocks or `/start` to view your dashboard."*
+
+Write the complete code module for this setup, ensuring robust validation, clean connection error handlers, and structured logging tools across all async pathways.
+
+We are implementing PART 2 of the "Testbook+" Educational Hub Bot.
+Stack: Python (python-telegram-bot v20.x), asyncio for non-blocking timers, and MongoDB/Motor.
+
+Implement the exact core quiz engine handling Native Telegram Polls (Quiz Mode), dynamic background timers per question, and state-tracking tracking user actions. The code must be asynchronous, production-ready, highly modularized, and cleanly structured.
+
+---
+
+### 🗳️ 1. NATIVE TELEGRAM POLL DISPATCHER & LIFECYCLE
+
+Write an asynchronous function `send_next_question(user_id, test_id)` that manages the execution flow of a running mock test:
+
+1. **Test Fetching & Pre-flight Checks:**
+   - Pull the specific `test_id` data from the `test_series` collection.
+   - Read the user's current index tracker from an active session memory or a transient runtime state.
+   - If `force_sub_enabled` is set to True in the configuration, perform a live check via `bot.get_chat_member`. If they left the channel midway, pause execution and prompt re-subscription.
+
+2. **Poll Dispatch System:**
+   - Extract the current question object from `questions_data` using the user's current index.
+   - Use `bot.send_poll` with the following parameters explicitly set:
+     - `chat_id`: User's direct Telegram ID.
+     - `question`: The text question string.
+     - `options`: List of strings parsed from the JSON.
+     - `type`: "quiz" (Must be Native Telegram Quiz Mode).
+     - `correct_option_index`: Integer index of the right option.
+     - `explanation`: The custom detailed text layout parsed from the JSON.
+     - `is_closed`: False.
+   - Capture and store the returned `poll_id` into the user's running session instance mapping it to the internal `question_id`.
+
+---
+
+### ⏱️ 2. ASYNCHRONOUS BACKGROUND TIMER LAYER
+
+Since we need a solid timeout mechanism without using rigid loops, implement a dedicated asynchronous timer loop for every active question poll:
+
+1. **Non-blocking Countdown Task:**
+   - When a poll is dispatched, spin up a background task using `asyncio.create_task(quiz_timer_worker(user_id, poll_id, timeout_duration=30))`.
+   - The worker must await an asynchronous sleep period (`asyncio.sleep(timeout_duration)`), continually checking if the user has interacted with the poll.
+
+2. **Poll Retraction & Auto-Skip Logic:**
+   - If the timeout limit is reached and the user has NOT responded, execute `bot.stop_poll(chat_id=user_id, message_id=poll_message_id)`.
+   - Update the user's live running session score sheet: increment `skipped_count` by 1.
+   - Send an immediate prompt message to the user: *"⏳ Time out! Aapne is question ka jawab samay par nahi diya."*
+   - Trigger an immediate callback to `send_next_question(user_id, test_id)` to gracefully progress to the next item automatically.
+
+---
+
+### 🛑 3. STATE CAPTURE & ANTI-CHEAT INTERCEPTOR
+
+Implement mechanisms to monitor user interaction and catch discrepancies during an open testing window:
+
+1. **Poll Answer Interceptor (`PollAnswerHandler`):**
+   - Register a global `PollAnswerHandler` to capture incoming user selections.
+   - Cross-check the received payload. Verify if `poll_id` matches the user's current active record.
+   - If the user selected an option:
+     - Cancel the running `asyncio` background timer task immediately.
+     - Compare `user_answer_index` against `correct_option_index`.
+     - Update user state arrays: If correct, increment `correct_count`. If wrong, increment `wrong_count` and push the current internal question reference ID into the user's transient `wrong_questions_list` state buffer.
+     - Proceed smoothly to fire the next question.
+
+2. **Window Switching / Cheat Telemetry Handler:**
+   - Track timestamps between question dispatches and incoming responses (`PollAnswer`).
+   - If the delta between the question send time and answer time deviates abnormally or indicates extreme delays paired with intermittent chat idling, increment a cheat state flag variable.
+   - If anomalous windows or delay thresholds trigger three times consecutively, flag the runtime and dispatch an assertive warning:
+     *"🚨 Anti-Cheat Warning: Web browser/chat switching activity ya excessive delays detect hui hain. Please test par focus karein warna system auto-submit kar dega!"*
+
+---
+
+Write the full code logic for this module. Ensure all conditions utilize precise event handling, prevent overlapping race conditions on timers, and gracefully manage state context when multiple users run tests simultaneously.
+
+We are implementing PART 3 of the "Testbook+" Educational Hub Bot.
+Stack: Python (python-telegram-bot v20.x), MongoDB/Motor, and integration hooks for AI APIs (like Gemini Pro).
+
+Implement the complete post-test scorecard generation matrix, an interactive pagination-based Solution Book navigation engine, and structural integrations for the Wrong Question Notebook and AI Doubt Solver. The code must be asynchronous, production-ready, highly modularized, and cleanly structured.
+
+---
+
+### 📊 1. SCORECARD GENERATOR MATRIX
+
+Write an asynchronous processing pipeline that triggers immediately when a test session terminates (either by final question completion or timeout auto-submission):
+
+1. **Analytical Data Compilation:**
+   - Fetch the running user stats from the active runtime state buffer (`correct_count`, `wrong_count`, `skipped_count`).
+   - Query the `test_series` collection to fetch `positive_marking` and `negative_marking` specifications for this specific `test_id`.
+   - Calculate the final score precisely using the formula: 
+     $$Score = (Correct \times Positive\_Marking) - (Wrong \times Negative\_Marking)$$
+   - Calculate `Accuracy %` = $(Correct / (Correct + Wrong)) \times 100$ (Handle zero division gracefully if user skips all questions).
+
+2. **Global Rank Aggregator:**
+   - Query the `history` collection to check where this user's current score stands relative to other records for the same `test_id`.
+   - Update the user's permanent record in the `users` collection: increment `total_tests_taken` by 1 and re-calculate their cumulative moving average `accuracy_rate`.
+
+3. **Premium Layout Dispatch:**
+   - Format and send a highly clean, well-spaced Text-Based Scorecard Message to the user:
+     "📊 TEST ANALYSIS REPORT: [{test_name}]\n\n👤 Name: {full_name}\nStatus: Completed 🏁\n\n📈 Your Score: {score} / {max_possible_score}\n🎯 Accuracy: {accuracy}%\n\n✅ Correct Answers: {correct_count}\n❌ Wrong Answers: {wrong_count}\n⏳ Skipped Questions: {skipped_count}\n\n🏆 Current Global Rank: #{rank} out of {total_participants}"
+   - Append two explicit Inline Buttons under this scorecard message:
+     `[🔍 View Detailed Solutions]` | `[🔄 Re-Attempt Test]`
+
+---
+
+### 📖 2. THE INTERACTIVE SOLUTION BOOK (PAGINATION ENGINE)
+
+When the user taps the `[🔍 View Detailed Solutions]` inline button, intercept the callback query and spin up an interactive sequential navigation frame:
+
+1. **State Injection:**
+   - Initialize a navigation tracker inside the temporary session memory mapping the current user to `current_solution_index = 0`.
+   - Maintain an ordered array representing every question extracted from the test's `questions_data`.
+
+2. **Dynamic Navigation View Render:**
+   - Write a helper function `render_solution_view(user_id, index)` that updates the existing message using `edit_message_text`.
+   - **Message Format Requirements:**
+     - **Header Line:** Display the current index and test context, e.g., "📖 SOLUTION BOOK: [Question {index + 1}/{total_questions}]"
+     - **Question Body:** The exact question text string.
+     - **User Attempt Metadata:** Render the option text index that the user picked versus the true correct option index. (Highlight explicitly using emojis: 🟢 for Correct option, 🔴 for user's wrong choice).
+     - **Solution Section:** Under a clear header `📝 Detailed Solution:`, parse and display the `explanation` string directly from the question database object.
+   - **Navigation Buttons Markup:** Append exactly three interactive inline buttons on a single row below the solution details text:
+     `[⬅️ Previous Q]` | `[🔢 Q {index + 1}/{total_questions}]` | `[➡️ Next Q]`
+   - Add dynamic callback queries to change indices asynchronously without spawning new chat bubbles. Bind boundaries securely (disable or hide the 'Previous' button at index 0 and the 'Next' button at the final item).
+
+---
+
+### 🧠 3. WRONG NOTEBOOK & AI DOUBT SOLVER SCHEDULER
+
+Implement the foundational framework pipelines for personal error tracking and active learning helpers:
+
+1. **Wrong Question Notebook Persistence (`/notebook`):**
+   - Save the collected `wrong_questions_list` permanently under the user's progress log collection linked to their `user_id`.
+   - When the `/notebook` command is invoked, look up all question structural definitions across the database flagged as wrong by the user, and construct a custom runtime quiz instance tracking only those specific items.
+
+2. **AI Doubt Solver Hook (`/doubt`):**
+   - On the Solution Book Navigation interface, append an extra option on a new button row below navigation controls: `[❓ Clear Doubt via AI]`.
+   - When clicked, asynchronously gather the string data of the current question, the user's wrong answer, the correct answer, and the default explanation.
+   - Route this concatenated context payload to your configured external AI endpoint (Gemini API module). Prompt the engine to compile an explicit, highly intuitive, instructional breakdown written clearly in conversational Hinglish.
+   - Return this AI-generated response directly into the user's private message box as a supportive follow-up message.
+
+---
+
+Ensure all states are cleanly updated in your persistence tables and that memory buffers are safely flushed once a user terminates their active solution viewing matrix.
+
+We are implementing PART 4 of the "Testbook+" Educational Hub Bot.
+Stack: Python (python-telegram-bot v20.x), Telepayment/Invoice methods, MongoDB/Motor, and a dynamic QR Code generation library (like `qrcode` or an external async API handler).
+
+Implement the complete automated monetization pipeline. This includes the Telegram Stars native payment gateway, dynamic UPI QR generation with predefined invoice metadata, and an asynchronous media receiver payload handler to intercept payment verification screenshots. The code must be asynchronous, production-ready, highly modularized, and cleanly structured.
+
+---
+
+### 🪙 1. NATIVE TELEGRAM STARS INVOICE GATEWAY
+
+Write the core billing handler to manage native digital asset payments inside Telegram using Stars:
+
+1. **Invoice Dispatcher Mechanism:**
+   - When a user selects a specific premium test package or triggers the `/premium` upgrade plan using a Telegram Stars payment option, look up the `price_in_stars` configuration from the targeted database object.
+   - Construct and dispatch an invoice using `bot.send_invoice`. Set these explicit configuration parameters:
+     - `chat_id`: User's distinct Telegram chat identifier.
+     - `title`: Plan or Test series name, e.g., "Premium Upgrade Pass".
+     - `description`: Detailed text explaining active deliverables (e.g., "Unlocks 100+ Trade & Govt Mock Tests with AI Doubt Solver for 30 Days").
+     - `payload`: A secure, structured internal string containing metadata, e.g., `"user_premium_30days_{user_id}_{timestamp}"`.
+     - `provider_token`: Keep this completely EMPTY `""` as required for Telegram Stars transactions.
+     - `currency`: Must be explicitly set to `"XTR"`.
+     - `prices`: Pass a list containing a single `LabeledPrice(label="Premium Access", amount=price_in_stars)`.
+
+2. **Pre-Checkout & Successful Payment Interceptors:**
+   - Register a dedicated `PreCheckoutQueryHandler`. When a user attempts checkout, instantly acknowledge and validate the query via `pre_checkout_query.answer(ok=True)` within the mandatory 10-second Telegram lifecycle window.
+   - Register a global `SuccessfulPaymentHandler` to intercept the final confirmation message.
+   - **Post-Payment Database Automation:** Upon successful transaction capture, extract data parameters from the billing payload:
+     - Update the target user record in the `users` collection: change `tier` to `"Premium"` and compute the exact `premium_expiry` date relative to the plan parameters.
+     - Inject a record into the `payments` collection with `method: "TG_Stars"`, `amount: X`, and `status: "Approved"`.
+     - Dispatch a premium transactional status card to the user confirming automatic deployment.
+
+---
+
+### 📲 2. DYNAMIC UPI QR GENERATOR PIPELINE
+
+Implement the alternative Indian billing track utilizing local payment links dynamically mapped to visual QR assets:
+
+1. **UPI Uniform Resource Identifier Builder:**
+   - When a user chooses the UPI payment option inside the `/premium` workflow, look up the targeted database pricing value in INR (`price_in_inr`).
+   - Dynamically synthesize a standard compliant UPI Deep-Linking string template matching this specification:
+     `upi://pay?pa=YOUR_ADMIN_VPA@upi&pn=TestbookPlus&am={price_in_inr}&cu=INR&tn=User_{user_id}_Test_{test_id}`
+   - *Ensure the transaction note (`tn`) includes explicit user and item identifiers to make ledger tracking easier.*
+
+2. **Visual QR Asset Dispatcher:**
+   - Pass the synthesized UPI string into an asynchronous matrix generator routine (e.g., using python's `qrcode` library or an async stream image parser) to output a clean, high-contrast, scannable QR Code image buffer.
+   - Use `bot.send_photo` to dispatch this QR asset into the user's private chat window with the following instructional markup text:
+     *"⚡ SCAN & PAY VIA UPI\n\n💰 Amount: ₹{price_in_inr}\n\n👉 Is QR Code ko scan karke kisi bhi UPI App (PhonePe, GooglePay, Paytm) se payment kijiye.\n\n⚠️ IMPORTANT: Payment karne ke baad, uska Clear Screenshot (jisme Transaction/UTR ID dikhe) DIRECT is chat mein send kijiye tabhi aapka premium approve hoga."*
+
+---
+
+### 📸 3. SCREENSHOT INTERCEPTOR & PENDING STATE CONTROLLER
+
+Write an asset pipeline trap to process user confirmation receipts safely:
+
+1. **Media Ingestion Flow:**
+   - Implement a specific `MessageHandler` filtered strictly for incoming photos (`filters.PHOTO`) that executes only when a user has an active, unresolved UPI checkout session pending in the system.
+   - Capture the incoming structural data array, isolate the highest resolution variant object, and copy its distinct `file_id`.
+
+2. **Verification Hold Database Operation:**
+   - Instantiate a new entry inside the `payments` collection tracking these exact state points:
+     - `payment_id`: Generate a clean unique string transaction token.
+     - `user_id`: Target account ID.
+     - `method`: "UPI"
+     - `amount`: Captured pricing value.
+     - `screenshot_file_id`: The stored Telegram image resource reference pointer.
+     - `status`: "Pending"
+     - `submitted_at`: Current server timestamp.
+   - Dispatch an interactive confirmation prompt back to the user:
+     *"📥 Screenshot Received! Aapka transaction validation process mein chala gaya hai.\n\nWeb Admin Dashboard par verification hote hi aapka Premium Tier automatic unlock ho jayega. Please wait..."*
+   - Forward or sync this state context instantly to make it accessible to the external FastAPI Admin Portal verification endpoint loop.
+
+---
+
+Ensure all database operations handle state changes securely, prevent concurrent state collision bugs, and isolate temporary chat parameters when users submit verification images.
+
+We are implementing PART 5 (Final Component) of the "Testbook+" Educational Hub Bot.
+Stack: FastAPI, Jinja2 Templates (or HTML5/Tailwind CSS Engine), MongoDB/Motor async database driver.
+
+Implement a secure, professional Web Admin Dashboard running concurrently on the same service container. This panel manages real-time telemetry analytics, manual screenshot approval workflows, data ingestion wizards, dynamic ad injections, and force-subscribe conditions. The code must be asynchronous, production-ready, highly modularized, and cleanly structured.
+
+---
+
+### 📊 1. LIVE METRICS TERMINAL ROUTE (`/admin/dashboard`)
+
+Create an authenticated secure GET route that compiles and serves the primary administrative operational state interface:
+
+1. **Analytical Query Aggregations:**
+   - Query the `users` collection to return absolute `Total Registered Users`.
+   - Aggregate records from the past 24 hours to track active user counts.
+   - Aggregate total earnings from the `payments` collection where `status == "Approved"`. Output separate tallies for total INR (via UPI) and total XTR (via Telegram Stars).
+   - Render a neat, responsive HTML/Tailwind CSS interface featuring elegant statistic cards and real-time operational graphs.
+
+---
+
+### 🧾 2. UPI SCREENSHOT APPROVAL QUEUE ROUTE (`/admin/payments`)
+
+Implement an interactive visual ledger queue interface to resolve pending local user deposits:
+
+1. **Visual Verification Queue View (GET):**
+   - Query the `payments` collection for records where `status == "Pending"`.
+   - Render rows showing: User ID, Submitter Full Name, Amount to Verify, Timestamp, and the associated image resource.
+   - *Technical Image Handling:* Replit must map the Telegram `screenshot_file_id` via an internal async helper routing to `bot.get_file(file_id)` to stream the binary image payload directly inside the browser rows securely.
+
+2. **State Resolution Gateways (POST):**
+   - Create two API endpoints `/admin/payments/approve/{payment_id}` and `/admin/payments/reject/{payment_id}`:
+     - **Approve Action:** Atomically flip the payment record state to `"Approved"`. Query the `users` table matching the associated `user_id`, switch their account state `tier` to `"Premium"`, and update their expiration date metrics. Instantly fire an asynchronous notification using `bot.send_message` alerting the user that their premium test pack is now fully unlocked.
+     - **Reject Action:** Flip the state to `"Rejected"` and push an alert message back to the target user chat interface reporting validation failure.
+
+---
+
+### 📄 3. JSON IMPORT & CONFIGURATION MASTER ROUTING (`/admin/import`)
+
+Create a robust schema ingestion interface to handle dynamic mock deployments via data drops:
+
+1. **Form Interface Fields:**
+   - Build a file submission form that accepts external arrays conforming exactly to our target quiz JSON configuration structure.
+   - Include web text field parameters: Test Name, Target Main Category, Target Sub Category, Positive Score Multiplier, Negative Penalty Weight, Price in INR, and Price in Telegram Stars.
+
+2. **Asynchronous Parser Pipeline (POST):**
+   - Write a parsing method that captures the uploaded file stream, decodes the raw elements, and validates the array tokens against the JSON structure parameters.
+   - Map the metadata form variables directly into a new structured entry inside the `test_series` collection. Once pushed, the script must instantly refresh active configurations so that users running `/test_series` inside Telegram can query and start the fresh mock series immediately.
+
+---
+
+### 📢 4. CAMPAIGN MANAGER & SYSTEM OVERRIDES VIEW (`/admin/settings`)
+
+Implement control routes to govern dynamic advertisement triggers and multi-channel marketing campaigns:
+
+1. **Dynamic Ad Injection Controls:**
+   - Provide standard HTML web form inputs to upload active ad graphic files, write promotional markdown copy, and define redirection target strings.
+   - Persist these values directly inside the `global_configuration` lookup table. The running Telegram Bot script must fetch this configuration dynamically to render these ad components after the configured question intervals.
+
+2. **Global System Broadcast Driver (POST):**
+   - Implement an asynchronous broad-spectrum notification dispatcher block. Include web selector variables to specify targets: `[All Active Accounts, Free Tier Only, Premium Tier Only]`.
+   - Integrate an internal asynchronous queuing algorithm to pace outbound data streams, ensuring the system respects Telegram API rate limits and avoids packet drops during bulk operations.
+
+3. **Multi-Channel Force Subscribe Toggle:**
+   - Include a web form input field to dynamically update the active `@channel_username` value and toggle the `force_sub_enabled` Boolean switch on the fly.
+
+---
+
+Ensure all web views are fully responsive, utilize clean error boundary screens, enforce robust routing protection checks, and prevent connection drops during heavy file upload configurations.
