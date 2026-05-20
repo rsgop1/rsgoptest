@@ -14,6 +14,7 @@ export const testSeriesTable = pgTable("test_series", {
   priceInStars: integer("price_in_stars").notNull().default(0),
   questionsData: jsonb("questions_data").notNull().default([]),
   isActive: boolean("is_active").notNull().default(true),
+  timerSeconds: integer("timer_seconds").notNull().default(30),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -27,4 +28,5 @@ export interface QuestionData {
   options: string[];
   correctOptionIndex: number;
   explanation: string;
+  language?: "en" | "hi";
 }

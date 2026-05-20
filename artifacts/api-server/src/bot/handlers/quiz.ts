@@ -4,7 +4,6 @@ import {
   testSeriesTable,
   userHistoryTable,
   wrongQuestionsTable,
-  purchasedTestsTable,
   usersTable,
 } from "@workspace/db";
 import { eq, and, count, gt } from "drizzle-orm";
@@ -13,7 +12,6 @@ import {
   getSession,
   updateSession,
   clearQuiz,
-  type QuizSession,
   type SolutionSession,
 } from "../session.js";
 import { getApi } from "../api-instance.js";
@@ -26,9 +24,9 @@ function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
 }
 
-function progressBar(value: number, max: number, length = 12): string {
+function progressBar(value: number, max: number, length = 10): string {
   if (max === 0) return "░".repeat(length);
-  const filled = Math.min(Math.round((value / max) * length), length);
+  const filled = Math.min(Math.max(0, Math.round((value / max) * length)), length);
   return "█".repeat(filled) + "░".repeat(length - filled);
 }
 
@@ -38,30 +36,22 @@ function buildScorecardCard(
   accuracy: number, rank: number, total: number
 ): string {
   const accBar = progressBar(accuracy, 100);
-  const scoreBar = progressBar(score, maxScore);
-  const totalQ = correct + wrong + skipped;
-  const grade = accuracy >= 85 ? "A+ 🏆" : accuracy >= 70 ? "A 🌟" : accuracy >= 55 ? "B+ 👍" : accuracy >= 40 ? "B 📚" : "C 💪";
+  const grade =
+    accuracy >= 85 ? "Excellent 🏆" :
+    accuracy >= 70 ? "Great 🌟" :
+    accuracy >= 55 ? "Good 👍" :
+    accuracy >= 40 ? "Average 📚" : "Keep Going 💪";
 
-  return "```\n" +
-    "╔══════════════════════════════╗\n" +
-    "║     📊 TEST RESULT CARD      ║\n" +
-    "╠══════════════════════════════╣\n" +
-    `║ ${testName.slice(0, 28).padEnd(28)}  ║\n` +
-    "╠══════════════════════════════╣\n" +
-    `║ Score:  ${String(score).padEnd(6)} / ${String(maxScore).padEnd(6)}              ║\n` +
-    `║         [${scoreBar}]    ║\n` +
-    "╠══════════════════════════════╣\n" +
-    `║ ✅ Correct:  ${String(correct).padEnd(16)}║\n` +
-    `║ ❌ Wrong:    ${String(wrong).padEnd(16)}║\n` +
-    `║ ⏭️ Skipped:  ${String(skipped).padEnd(16)}║\n` +
-    "╠══════════════════════════════╣\n" +
-    `║ 🎯 Accuracy: ${(accuracy.toFixed(1) + "%").padEnd(16)}║\n` +
-    `║    [${accBar}]     ║\n` +
-    `║ 📊 Grade: ${grade.padEnd(19)}║\n` +
-    "╠══════════════════════════════╣\n" +
-    `║ 🏆 Rank: #${String(rank).padEnd(5)} of ${String(total).padEnd(14)}║\n` +
-    "╚══════════════════════════════╝\n" +
-    "```";
+  return (
+    `📊 *Series TestPro — Result*\n\n` +
+    `📝 *${escMd(testName.trim())}*\n\n` +
+    `🔢 Score: *${escMd(String(score))} \\/ ${escMd(String(maxScore))}*\n\n` +
+    `✅ Correct: *${correct}*   ❌ Wrong: *${wrong}*   ⏭️ Skipped: *${skipped}*\n\n` +
+    `🎯 Accuracy: *${escMd(accuracy.toFixed(1))}%*\n` +
+    `\\[${accBar}\\]\n\n` +
+    `🏅 Grade: *${escMd(grade)}*\n` +
+    `🏆 Rank: *\\#${rank}* of *${total}* students`
+  );
 }
 
 export async function sendNextQuestion(userId: number): Promise<void> {
@@ -76,9 +66,7 @@ export async function sendNextQuestion(userId: number): Promise<void> {
     try {
       const member = await api.getChatMember(channel, userId);
       if (member.status === "left" || member.status === "kicked") {
-        await api.sendMessage(userId,
-          `🔒 Please join our channel to continue the test:\n${channel}\n\nJoin and then send /start to resume.`
-        );
+        await api.sendMessage(userId, `🔒 Join our channel to continue:\n${channel}\n\nJoin and send /start to resume.`);
         clearQuiz(userId);
         return;
       }
@@ -92,14 +80,21 @@ export async function sendNextQuestion(userId: number): Promise<void> {
 
   const question = quiz.questions[quiz.currentIndex]!;
   quiz.questionSentAt = Date.now();
+  const timerSec = quiz.timerSeconds ?? 30;
 
   try {
-    const msg = await api.sendPoll(userId, question.question, question.options, {
-      type: "quiz",
-      correct_option_ids: [question.correctOptionIndex],
-      explanation: question.explanation || undefined,
-      is_anonymous: false,
-    });
+    const msg = await api.sendPoll(
+      userId,
+      question.question.slice(0, 300),
+      question.options.map(o => ({ text: o.slice(0, 100) })),
+      {
+        type: "quiz",
+        correct_option_id: question.correctOptionIndex,
+        explanation: question.explanation ? question.explanation.slice(0, 200) : undefined,
+        is_anonymous: false,
+        open_period: timerSec,
+      }
+    );
 
     quiz.currentPollMessageId = msg.message_id;
     const pollData = (msg as any).poll;
@@ -115,9 +110,9 @@ export async function sendNextQuestion(userId: number): Promise<void> {
       q.currentIndex++;
       q.timer = undefined;
       updateSession(userId, { quiz: q });
-      await api.sendMessage(userId, "⏳ *Time's up!* You didn't answer this question in time.", { parse_mode: "Markdown" });
+      await api.sendMessage(userId, "⏳ *Time's up\\!* Moving to next question\\.", { parse_mode: "MarkdownV2" });
       await sendNextQuestion(userId);
-    }, 30000);
+    }, timerSec * 1000);
 
     updateSession(userId, { quiz });
   } catch (err) {
@@ -130,8 +125,6 @@ async function generateScorecard(userId: number): Promise<void> {
   const session = getSession(userId);
   const quiz = session.quiz;
   if (!quiz) return;
-
-  const isChallenge = quiz.testId.startsWith("challenge_") || quiz.testName.startsWith("⚔️");
 
   let pos = 1, neg = 0.25;
   if (quiz.testId !== "notebook") {
@@ -191,7 +184,7 @@ async function generateScorecard(userId: number): Promise<void> {
     await postChallengeResult(challengeId, userId, score, quiz.correctCount, quiz.questions.length).catch(() => {});
   }
 
-  await api.sendMessage(userId, `*Test Completed\\!*\n\n${escMd(card).replace(/```/g, "```")}`.replace(/\\```/g, "```"), {
+  await api.sendMessage(userId, card, {
     parse_mode: "MarkdownV2",
     reply_markup: scorecardKeyboard(quiz.testId),
   });
@@ -211,7 +204,7 @@ function buildSolutionText(session: SolutionSession): string {
     return `${prefix} ${escMd(opt)}`;
   });
 
-  return `📖 *SOLUTION BOOK — Question ${currentIndex + 1}/${questions.length}*\n\n*${escMd(q.question)}*\n\n${optionLines.join("\n")}\n\n📝 *Detailed Explanation:*\n${escMd(q.explanation || "No explanation available.")}`;
+  return `📖 *SOLUTION BOOK — Q${currentIndex + 1}\\/${questions.length}*\n\n*${escMd(q.question)}*\n\n${optionLines.join("\n")}\n\n📝 *Explanation:*\n${escMd(q.explanation || "No explanation available.")}`;
 }
 
 export function registerQuizHandlers(bot: Bot): void {
@@ -262,7 +255,7 @@ export function registerQuizHandlers(bot: Bot): void {
   bot.callbackQuery("doubt_ai", async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.reply(
-      "🤖 *AI Doubt Solver*\n\nComing soon\\! OpenRouter integration is being configured\\.\n\nFor now, the detailed explanation above covers the solution step by step\\.",
+      "🤖 *AI Doubt Solver*\n\nType your doubt with the command:\n`/doubt your question here`\n\nExample: `/doubt What is passive voice?`",
       { parse_mode: "MarkdownV2" }
     );
   });
@@ -279,10 +272,10 @@ export function registerQuizHandlers(bot: Bot): void {
 
     updateSession(userId, {
       solution: undefined,
-      quiz: { testId: test.testId, testName: test.testName, questions, currentIndex: 0, correctCount: 0, wrongCount: 0, skippedCount: 0, wrongQuestionIds: [], cheatWarnings: 0 },
+      quiz: { testId: test.testId, testName: test.testName, questions, currentIndex: 0, correctCount: 0, wrongCount: 0, skippedCount: 0, wrongQuestionIds: [], cheatWarnings: 0, timerSeconds: test.timerSeconds ?? 30 },
     });
 
-    await ctx.reply(`🔄 *Re-attempting: ${escMd(test.testName)}*\n\n⏱️ 30 seconds per question\n\nGood luck! 💪`, { parse_mode: "MarkdownV2" });
+    await ctx.reply(`🔄 *Re\\-attempting: ${escMd(test.testName.trim())}*\n\n⏱️ ${test.timerSeconds ?? 30}s per question\n\nGood luck\\! 💪`, { parse_mode: "MarkdownV2" });
     await sendNextQuestion(userId);
   });
 
@@ -312,7 +305,7 @@ export function registerQuizHandlers(bot: Bot): void {
         quiz.cheatWarnings++;
         if (quiz.cheatWarnings >= 3) {
           await ctx.api.sendMessage(userId,
-            "🚨 *Anti-Cheat Warning:* Suspicious activity detected \\(extremely fast answers\\)\\. Please answer honestly — the system will auto\\-submit if this continues\\.",
+            "🚨 *Anti\\-Cheat:* Suspicious activity detected\\. Please answer honestly\\.",
             { parse_mode: "MarkdownV2" }
           );
         }
@@ -325,9 +318,24 @@ export function registerQuizHandlers(bot: Bot): void {
   });
 
   bot.callbackQuery(/^start_test_/, async (ctx) => {
-    await ctx.answerCallbackQuery();
     const testId = ctx.callbackQuery.data.replace("start_test_", "");
     const userId = ctx.from.id;
+    const chatId = ctx.chat?.id ?? userId;
+    const chatType = ctx.chat?.type ?? "private";
+    const isGroup = chatType === "group" || chatType === "supergroup";
+
+    if (isGroup) {
+      try {
+        const member = await ctx.api.getChatMember(chatId, userId);
+        if (member.status !== "creator" && member.status !== "administrator") {
+          await ctx.answerCallbackQuery({ text: "⚠️ Only group admins can start tests here!", show_alert: true });
+          return;
+        }
+      } catch (_) {}
+    }
+
+    await ctx.answerCallbackQuery();
+
     const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
 
     if (!test) { await ctx.reply("❌ Test not found."); return; }
@@ -339,11 +347,11 @@ export function registerQuizHandlers(bot: Bot): void {
 
     updateSession(userId, {
       solution: undefined,
-      quiz: { testId: test.testId, testName: test.testName, questions, currentIndex: 0, correctCount: 0, wrongCount: 0, skippedCount: 0, wrongQuestionIds: [], cheatWarnings: 0 },
+      quiz: { testId: test.testId, testName: test.testName, questions, currentIndex: 0, correctCount: 0, wrongCount: 0, skippedCount: 0, wrongQuestionIds: [], cheatWarnings: 0, timerSeconds: test.timerSeconds ?? 30 },
     });
 
     await ctx.reply(
-      `🚀 *${escMd(test.testName)}* starting\\!\n\n📝 Total Questions: *${questions.length}*\n⏱️ Time per question: *30 seconds*\n➕ Correct: *\\+${test.positiveMarking}*  ➖ Wrong: *\\-${test.negativeMarking}*\n\nAll the best\\! 💪`,
+      `🚀 *${escMd(test.testName.trim())}* starting\\!\n\n📝 Questions: *${questions.length}*\n⏱️ Timer: *${test.timerSeconds ?? 30}s* per question\n➕ Correct: *\\+${escMd(String(test.positiveMarking))}*  ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n\nAll the best\\! 💪`,
       { parse_mode: "MarkdownV2" }
     );
     await sendNextQuestion(userId);

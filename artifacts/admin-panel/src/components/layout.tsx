@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { useAdminGetMe, useAdminLogout, getAdminGetMeQueryKey } from "@workspace/api-client-react";
@@ -14,6 +14,7 @@ import {
   Users,
   LogOut,
   Menu,
+  BarChart2,
 } from "lucide-react";
 import { ReactNode } from "react";
 
@@ -21,6 +22,7 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/payments", label: "Payments", icon: CreditCard },
   { href: "/tests", label: "Test Series", icon: FileText },
+  { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/flash-sales", label: "Flash Sales", icon: Tag },
   { href: "/users", label: "Users", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -69,6 +71,12 @@ export function Layout({ children }: { children: ReactNode }) {
     },
   });
 
+  useEffect(() => {
+    if ((isError || !user?.authenticated) && !isLoading && location !== "/login") {
+      setLocation("/login");
+    }
+  }, [isError, user, isLoading, location, setLocation]);
+
   if (isLoading) {
     return (
       <div className="flex h-screen w-full bg-background items-center justify-center">
@@ -78,7 +86,6 @@ export function Layout({ children }: { children: ReactNode }) {
   }
 
   if (isError || !user?.authenticated) {
-    if (location !== "/login") setLocation("/login");
     return null;
   }
 
@@ -91,7 +98,8 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* Desktop Sidebar */}
       <aside className="w-64 border-r bg-card flex-col hidden md:flex">
         <div className="p-6 border-b">
-          <h1 className="text-xl font-bold tracking-tight text-primary">Testbook+ Admin</h1>
+          <h1 className="text-xl font-bold tracking-tight text-primary">Series TestPro</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">Admin Panel</p>
         </div>
         <NavLinks location={location} />
         <div className="p-4 border-t">
@@ -111,7 +119,9 @@ export function Layout({ children }: { children: ReactNode }) {
       <div className="flex flex-col flex-1 overflow-hidden md:contents">
         {/* Mobile Top Bar */}
         <header className="flex md:hidden items-center justify-between px-4 py-3 bg-card border-b shrink-0">
-          <h1 className="text-base font-bold text-primary">Testbook+ Admin</h1>
+          <div>
+            <h1 className="text-base font-bold text-primary">Series TestPro</h1>
+          </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground font-medium">
               {currentPage?.label ?? "Admin"}
@@ -124,7 +134,8 @@ export function Layout({ children }: { children: ReactNode }) {
               </SheetTrigger>
               <SheetContent side="left" className="w-64 p-0 flex flex-col">
                 <div className="p-6 border-b">
-                  <h1 className="text-xl font-bold tracking-tight text-primary">Testbook+ Admin</h1>
+                  <h1 className="text-xl font-bold tracking-tight text-primary">Series TestPro</h1>
+                  <p className="text-xs text-muted-foreground mt-0.5">Admin Panel</p>
                 </div>
                 <NavLinks location={location} onNavigate={() => setMobileOpen(false)} />
                 <div className="p-4 border-t">

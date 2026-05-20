@@ -13,6 +13,8 @@ export const usersTable = pgTable("users", {
   targetExamSub: text("target_exam_sub"),
   accuracyRate: doublePrecision("accuracy_rate").notNull().default(0),
   totalTestsTaken: integer("total_tests_taken").notNull().default(0),
+  referredBy: bigint("referred_by", { mode: "number" }),
+  referralCount: integer("referral_count").notNull().default(0),
   joinedAt: timestamp("joined_at").notNull().defaultNow(),
 });
 

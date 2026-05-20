@@ -14,6 +14,7 @@ export interface QuizSession {
   timer?: ReturnType<typeof setTimeout>;
   questionSentAt?: number;
   cheatWarnings: number;
+  timerSeconds: number;
 }
 
 export interface SolutionSession {

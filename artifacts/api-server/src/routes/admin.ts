@@ -9,7 +9,8 @@ import {
   flashSalesTable,
   userHistoryTable,
 } from "@workspace/db";
-import { eq, and, count, gte, sql, desc } from "drizzle-orm";
+import { eq, and, count, gte, sql, desc, gt } from "drizzle-orm";
+import type { QuestionData } from "@workspace/db";
 import { getApi } from "../bot/api-instance.js";
 import { setConfig } from "../bot/handlers/helpers.js";
 import { logger } from "../lib/logger.js";
@@ -140,14 +141,14 @@ router.post("/payments/:paymentId/approve", requireAuth, async (req: Request, re
     if (payment.testId && payment.testId !== "premium") {
       await db.insert(purchasedTestsTable).values({ userId: payment.userId, testId: payment.testId }).catch(() => {});
       await api.sendMessage(payment.userId,
-        `Payment Approved!\n\nYour UPI payment has been verified! Test unlocked. Use /test_series to access it.`,
+        `✅ Payment Approved!\n\nYour UPI payment has been verified! Test unlocked.\n\nUse /test_series to access it.`,
       ).catch(() => {});
     } else {
       const expiry = new Date();
       expiry.setDate(expiry.getDate() + 30);
       await db.update(usersTable).set({ tier: "Premium", premiumExpiry: expiry }).where(eq(usersTable.userId, payment.userId));
       await api.sendMessage(payment.userId,
-        `Premium Activated!\n\nYour payment has been verified. Testbook+ Premium is now active for 30 days!\n\nUse /test_series to access all tests.`,
+        `💎 Premium Activated!\n\nYour payment has been verified. Series TestPro Premium is now active for 30 days!\n\nUse /test_series to access all tests.`,
       ).catch(() => {});
     }
 
@@ -166,7 +167,7 @@ router.post("/payments/:paymentId/reject", requireAuth, async (req: Request, res
       await db.update(paymentsTable).set({ status: "Rejected" }).where(eq(paymentsTable.paymentId, paymentId));
       const api = getApi();
       await api.sendMessage(payment.userId,
-        `Payment Rejected\n\nYour payment screenshot could not be verified. Please send a valid screenshot or contact admin.`,
+        `❌ Payment Rejected\n\nYour payment screenshot could not be verified. Please send a valid screenshot or contact admin.`,
       ).catch(() => {});
     }
     res.json({ success: true, message: "Payment rejected" });
@@ -207,6 +208,7 @@ router.get("/tests", requireAuth, async (_req: Request, res: Response) => {
       priceInr: t.priceInr,
       priceInStars: t.priceInStars,
       isActive: t.isActive,
+      timerSeconds: t.timerSeconds,
       createdAt: t.createdAt.toISOString(),
       questionCount: Array.isArray(t.questionsData) ? t.questionsData.length : 0,
     })));
@@ -218,7 +220,8 @@ router.get("/tests", requireAuth, async (_req: Request, res: Response) => {
 
 router.post("/tests", requireAuth, async (req: Request, res: Response) => {
   try {
-    const { testId, testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, questionsJson } = req.body as Record<string, string>;
+    const body = req.body as Record<string, string | number>;
+    const { testId, testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, questionsJson, timerSeconds, language } = body as Record<string, string>;
     let questions: unknown[];
     try {
       questions = JSON.parse(questionsJson ?? "[]");
@@ -228,12 +231,16 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
       return;
     }
 
-    const questionsWithIds = (questions as any[]).map((q, i) => ({
+    const lang = (language ?? "en") as "en" | "hi";
+    const timerSec = Math.max(10, parseInt(String(timerSeconds ?? "30")) || 30);
+
+    const questionsWithIds = (questions as QuestionData[]).map((q, i) => ({
       id: `${testId}_q${i}`,
       question: q.question ?? "",
       options: q.options ?? [],
       correctOptionIndex: q.correctOptionIndex ?? 0,
       explanation: q.explanation ?? "",
+      language: q.language ?? lang,
     }));
 
     const [inserted] = await db.insert(testSeriesTable).values({
@@ -241,22 +248,24 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
       testName,
       mainCategory,
       subCategory,
-      positiveMarking: parseFloat(positiveMarking ?? "1"),
-      negativeMarking: parseFloat(negativeMarking ?? "0.25"),
-      priceInr: parseInt(priceInr ?? "0"),
-      priceInStars: parseInt(priceInStars ?? "0"),
+      positiveMarking: parseFloat(String(positiveMarking ?? "1")),
+      negativeMarking: parseFloat(String(negativeMarking ?? "0.25")),
+      priceInr: parseInt(String(priceInr ?? "0")),
+      priceInStars: parseInt(String(priceInStars ?? "0")),
       questionsData: questionsWithIds,
+      timerSeconds: timerSec,
     }).onConflictDoUpdate({
       target: testSeriesTable.testId,
       set: {
         testName,
         mainCategory,
         subCategory,
-        positiveMarking: parseFloat(positiveMarking ?? "1"),
-        negativeMarking: parseFloat(negativeMarking ?? "0.25"),
-        priceInr: parseInt(priceInr ?? "0"),
-        priceInStars: parseInt(priceInStars ?? "0"),
+        positiveMarking: parseFloat(String(positiveMarking ?? "1")),
+        negativeMarking: parseFloat(String(negativeMarking ?? "0.25")),
+        priceInr: parseInt(String(priceInr ?? "0")),
+        priceInStars: parseInt(String(priceInStars ?? "0")),
         questionsData: questionsWithIds,
+        timerSeconds: timerSec,
       },
     }).returning();
 
@@ -271,6 +280,7 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
       priceInr: inserted!.priceInr,
       priceInStars: inserted!.priceInStars,
       isActive: inserted!.isActive,
+      timerSeconds: inserted!.timerSeconds,
       createdAt: inserted!.createdAt.toISOString(),
       questionCount: questionsWithIds.length,
     });
@@ -301,6 +311,63 @@ router.post("/tests/:testId/toggle", requireAuth, async (req: Request, res: Resp
   } catch (err) {
     logger.error({ err }, "Error toggling test");
     res.status(500).json({ error: "Failed to toggle test" });
+  }
+});
+
+router.get("/tests/:testId/analytics", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const testId = String(req.params["testId"]);
+    const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
+    if (!test) { res.status(404).json({ error: "Test not found" }); return; }
+
+    const history = await db.select().from(userHistoryTable).where(eq(userHistoryTable.testId, testId));
+    const totalAttempts = history.length;
+    const avgScore = totalAttempts > 0 ? history.reduce((s, h) => s + h.score, 0) / totalAttempts : 0;
+    const avgAccuracy = totalAttempts > 0 ? history.reduce((s, h) => s + h.accuracy, 0) / totalAttempts : 0;
+    const bestScore = totalAttempts > 0 ? Math.max(...history.map(h => h.score)) : 0;
+
+    const userMap = new Map<number, { score: number }>();
+    for (const h of history) {
+      const existing = userMap.get(h.userId);
+      if (!existing || h.score > existing.score) {
+        userMap.set(h.userId, { score: h.score });
+      }
+    }
+    const topUserIds = [...userMap.entries()].sort((a, b) => b[1].score - a[1].score).slice(0, 5);
+    const topScorers: Array<{ userId: number; score: number; name: string }> = [];
+    for (const [uid, data] of topUserIds) {
+      const [user] = await db.select({ fullName: usersTable.fullName }).from(usersTable).where(eq(usersTable.userId, uid)).limit(1);
+      topScorers.push({ userId: uid, score: data.score, name: user?.fullName ?? String(uid) });
+    }
+
+    const qCount = Array.isArray(test.questionsData) ? test.questionsData.length : 0;
+    const maxPossible = qCount * test.positiveMarking;
+    const buckets = [0, 0, 0, 0, 0];
+    for (const h of history) {
+      const pct = maxPossible > 0 ? (h.score / maxPossible) * 100 : 0;
+      const bucket = Math.min(4, Math.max(0, Math.floor(pct / 20)));
+      buckets[bucket]++;
+    }
+
+    res.json({
+      testId: test.testId,
+      testName: test.testName,
+      totalAttempts,
+      avgScore: parseFloat(avgScore.toFixed(2)),
+      avgAccuracy: parseFloat(avgAccuracy.toFixed(1)),
+      bestScore,
+      topScorers,
+      scoreDistribution: [
+        { range: "0–20%", count: buckets[0] },
+        { range: "20–40%", count: buckets[1] },
+        { range: "40–60%", count: buckets[2] },
+        { range: "60–80%", count: buckets[3] },
+        { range: "80–100%", count: buckets[4] },
+      ],
+    });
+  } catch (err) {
+    logger.error({ err }, "Analytics error");
+    res.status(500).json({ error: "Failed to load analytics" });
   }
 });
 
@@ -402,16 +469,13 @@ router.post("/broadcast", requireAuth, async (req: Request, res: Response) => {
     }
 
     const api = getApi();
-    let sent = 0;
-    let failed = 0;
+    let sent = 0, failed = 0;
     for (const u of users) {
       try {
-        await api.sendMessage(u.userId, `Admin Broadcast\n\n${message}`);
+        await api.sendMessage(u.userId, `📢 Series TestPro Update\n\n${message}`);
         sent++;
         await new Promise((r) => setTimeout(r, 50));
-      } catch {
-        failed++;
-      }
+      } catch { failed++; }
     }
     res.json({ sent, failed });
   } catch (err) {
@@ -437,6 +501,7 @@ router.get("/users", requireAuth, async (_req: Request, res: Response) => {
       tier: u.tier,
       targetExamSub: u.targetExamSub,
       totalTestsTaken: historyMap.get(u.userId) ?? 0,
+      referralCount: u.referralCount,
       joinedAt: u.joinedAt.toISOString(),
     })));
   } catch (err) {

@@ -4,6 +4,7 @@ import Login from "./pages/login";
 import Dashboard from "./pages/dashboard";
 import Payments from "./pages/payments";
 import Tests from "./pages/tests";
+import Analytics from "./pages/analytics";
 import FlashSales from "./pages/flash-sales";
 import Settings from "./pages/settings";
 import Users from "./pages/users";
@@ -23,6 +24,9 @@ function AppRoutes() {
       </Route>
       <Route path="/tests">
         <Layout><Tests /></Layout>
+      </Route>
+      <Route path="/analytics">
+        <Layout><Analytics /></Layout>
       </Route>
       <Route path="/flash-sales">
         <Layout><FlashSales /></Layout>

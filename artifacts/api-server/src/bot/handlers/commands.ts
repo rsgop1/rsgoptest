@@ -59,7 +59,7 @@ export function registerCommandHandlers(bot: Bot): void {
         const sale = (!hasAccess && !isFree) ? await getActiveSale(test.testId) : null;
         const lock = hasAccess ? "🔓" : (sale ? "🔥" : "🔒");
 
-        msg += `${lock} *${escMd(test.testName)}*\n`;
+        msg += `${lock} *${escMd(test.testName.trim())}*\n`;
         msg += `   📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n`;
 
         if (!isFree) {
@@ -74,9 +74,9 @@ export function registerCommandHandlers(bot: Bot): void {
         msg += "\n";
 
         if (hasAccess) {
-          kb.text(`▶️ ${test.testName.slice(0, 30)}`, `start_test_${test.testId}`).row();
+          kb.text(`▶️ ${test.testName.trim().slice(0, 30)}`, `start_test_${test.testId}`).row();
         } else {
-          const btnLabel = sale ? `🔥 ${test.testName.slice(0, 24)} — Sale!` : `🔒 ${test.testName.slice(0, 25)} — Unlock`;
+          const btnLabel = sale ? `🔥 ${test.testName.trim().slice(0, 24)} — Sale!` : `🔒 ${test.testName.trim().slice(0, 25)} — Unlock`;
           kb.text(btnLabel, `unlock_test_${test.testId}`).row();
         }
       }
@@ -96,26 +96,87 @@ export function registerCommandHandlers(bot: Bot): void {
     if (!test) { await ctx.reply("❌ Test not found."); return; }
 
     const sale = await getActiveSale(testId);
-    const saleMsg = sale ? `\n\n🔥 *FLASH SALE ACTIVE\\!* ~~₹${test.priceInr}~~ → *₹${sale.discountInr}*` : "";
+    const saleMsg = sale ? `\n\n🔥 *FLASH SALE\\!* ~~₹${test.priceInr}~~ → *₹${sale.discountInr}*` : "";
 
     await ctx.reply(
-      `🔒 *${escMd(test.testName)}*${saleMsg}\n\nUnlock this test to access all questions, detailed solutions, and ranking\\.`,
+      `🔒 *${escMd(test.testName.trim())}*${saleMsg}\n\nUnlock this test to access all questions, solutions, and global ranking\\.`,
       { parse_mode: "MarkdownV2", reply_markup: paymentKeyboard(test.testId, sale?.discountInr ?? test.priceInr, sale?.discountStars ?? test.priceInStars) }
     );
   });
 
   bot.command("premium", async (ctx) => {
     await ctx.reply(
-      `💎 *Testbook\\+ Premium*\n\n*What you get:*\n✅ All mock tests unlocked\n✅ AI Doubt Solver \\(coming soon\\)\n✅ Detailed solutions for every question\n✅ Global rank & performance analytics\n✅ Wrong question notebook\n✅ Flash sale early access\n\n💰 *Plan:* 30 Days Premium\n💲 ₹199 / ⭐ 500 Telegram Stars\n\nChoose your payment method:`,
+      `💎 *Series TestPro Premium*\n\n*What you get:*\n✅ All mock tests unlocked\n✅ AI Doubt Solver\n✅ Detailed solutions for every question\n✅ Global rank & performance analytics\n✅ Wrong question notebook\n✅ Flash sale early access\n\n💰 *Plan:* 30 Days Premium\n💲 ₹199 \\| ⭐ 500 Telegram Stars\n\nChoose your payment method:`,
       { parse_mode: "MarkdownV2", reply_markup: premiumKeyboard() }
     );
   });
 
   bot.command("doubt", async (ctx) => {
-    await ctx.reply(
-      `🤖 *AI Doubt Solver*\n\nThis feature is coming soon\\!\n\nOpenRouter AI integration is being set up\\. For now, check the *Detailed Solution* section in the solution book after each test — it has step\\-by\\-step explanations\\.\n\n👉 Take a test via /test\\_series and tap *"View Detailed Solutions"* after completion\\.`,
-      { parse_mode: "MarkdownV2" }
-    );
+    const text = ctx.message?.text?.replace(/^\/doubt\s*/, "").trim();
+
+    if (!text) {
+      await ctx.reply(
+        `🤖 *AI Doubt Solver*\n\nType your doubt directly after the command:\n\`/doubt your question here\`\n\nExamples:\n• \`/doubt What is passive voice?\`\n• \`/doubt Explain compound interest formula\`\n• \`/doubt RRB NTPC syllabus 2024\``,
+        { parse_mode: "MarkdownV2" }
+      );
+      return;
+    }
+
+    const thinkMsg = await ctx.reply("🤔 Solving your doubt\\.\\.\\.", { parse_mode: "MarkdownV2" });
+
+    try {
+      const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"];
+      const apiKey = process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
+
+      if (!baseUrl || !apiKey) {
+        await ctx.api.editMessageText(ctx.chat.id, thinkMsg.message_id,
+          "❌ AI service not configured yet. Please try again later."
+        );
+        return;
+      }
+
+      const resp = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "deepseek/deepseek-v4-flash:free",
+          messages: [
+            {
+              role: "system",
+              content: "You are a helpful educational AI for Indian competitive exam students (SSC, Railway, Banking, UPSC, State GovtJobs). Answer doubts clearly and concisely in English. Keep responses under 250 words. Use simple formatting without markdown symbols."
+            },
+            { role: "user", content: text }
+          ],
+          max_tokens: 500,
+        }),
+      });
+
+      const data = await resp.json() as {
+        choices?: Array<{ message?: { content?: string } }>;
+        error?: { message: string };
+      };
+
+      if (data.error) {
+        throw new Error(data.error.message);
+      }
+
+      const answer = data.choices?.[0]?.message?.content ?? "Could not get an answer. Please try again.";
+
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        thinkMsg.message_id,
+        `🤖 *AI Doubt Solver*\n\n*Question:* ${escMd(text.slice(0, 100))}\n\n*Answer:*\n${escMd(answer)}`,
+        { parse_mode: "MarkdownV2" }
+      );
+    } catch (err) {
+      logger.error({ err }, "doubt solver error");
+      await ctx.api.editMessageText(ctx.chat.id, thinkMsg.message_id,
+        "❌ AI service unavailable right now. Please try again in a moment."
+      );
+    }
   });
 
   bot.command("notebook", async (ctx) => {
@@ -125,7 +186,7 @@ export function registerCommandHandlers(bot: Bot): void {
 
       if (!wrongQ.length) {
         await ctx.reply(
-          `📓 *Wrong Question Notebook*\n\nNo wrong questions recorded yet\\! 🎉\n\nAttempt a test via /test\\_series and your incorrect answers will be saved here for practice\\.`,
+          `📓 *Wrong Question Notebook*\n\nNo wrong questions yet\\! 🎉\n\nAttempt a test via /test\\_series and your incorrect answers will be saved here for practice\\.`,
           { parse_mode: "MarkdownV2" }
         );
         return;
@@ -164,6 +225,7 @@ export function registerCommandHandlers(bot: Bot): void {
           skippedCount: 0,
           wrongQuestionIds: [],
           cheatWarnings: 0,
+          timerSeconds: 30,
         },
         solution: undefined,
       });

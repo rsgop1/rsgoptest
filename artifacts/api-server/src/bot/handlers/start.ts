@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import { db } from "@workspace/db";
 import { usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   mainCategoryKeyboard,
   sscSubKeyboard,
@@ -9,7 +9,7 @@ import {
   bankingSubKeyboard,
   biharSubKeyboard,
 } from "../keyboards.js";
-import { updateSession } from "../session.js";
+import { getSession, updateSession } from "../session.js";
 import { handleChallengeStart } from "./challenge.js";
 import { logger } from "../../lib/logger.js";
 
@@ -17,16 +17,16 @@ function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
 }
 
-const WELCOME_MSG = `🚀 *Welcome to Testbook\\+ Engine\\!*
+const WELCOME_MSG = `🚀 *Welcome to Series TestPro\\!*
 
 Your exam preparation, automated and supercharged\\.
 
 👇 Select your main exam category below:`;
 
-const DASHBOARD_MSG = (name: string, sub: string, tier: string) =>
-  `👋 *Welcome back, ${escMd(name)}\\!*
+function dashboardMsg(name: string, sub: string, tier: string, refLink: string): string {
+  return `👋 *Welcome back, ${escMd(name)}\\!*
 
-🎯 Target Exam: *${escMd(sub)}*
+🎯 Target: *${escMd(sub)}*
 💎 Tier: *${escMd(tier === "Premium" ? "💎 Premium" : "🆓 Free")}*
 
 📚 Commands:
@@ -36,9 +36,16 @@ const DASHBOARD_MSG = (name: string, sub: string, tier: string) =>
 /notebook — Practice wrong questions
 /challenge — Start a group challenge
 /premium — Upgrade to Premium
-/doubt — AI Doubt Solver \\(coming soon\\)`;
+/doubt — AI Doubt Solver
 
-async function upsertUser(userId: number, firstName: string, lastName: string | undefined, username: string | undefined): Promise<void> {
+👥 *Your Referral Link:*
+\`${escMd(refLink)}\``;
+}
+
+async function upsertUser(
+  userId: number, firstName: string, lastName: string | undefined,
+  username: string | undefined, referredBy?: number
+): Promise<boolean> {
   const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
   if (existing.length === 0) {
     await db.insert(usersTable).values({
@@ -46,9 +53,18 @@ async function upsertUser(userId: number, firstName: string, lastName: string | 
       username: username ?? null,
       fullName: `${firstName}${lastName ? " " + lastName : ""}`,
       tier: "Free",
+      referredBy: referredBy ?? null,
     });
+    if (referredBy) {
+      await db.update(usersTable)
+        .set({ referralCount: sql`${usersTable.referralCount} + 1` })
+        .where(eq(usersTable.userId, referredBy))
+        .catch(() => {});
+    }
+    return true;
   } else {
     await db.update(usersTable).set({ username: username ?? null }).where(eq(usersTable.userId, userId));
+    return false;
   }
 }
 
@@ -56,89 +72,78 @@ export function registerStartHandlers(bot: Bot): void {
   bot.command("start", async (ctx) => {
     try {
       const from = ctx.from!;
-      await upsertUser(from.id, from.first_name, from.last_name, from.username);
+      const param = ctx.match?.trim() ?? "";
 
-      const payload = ctx.match;
-      if (payload?.startsWith("challenge_")) {
-        const challengeId = payload.replace("challenge_", "");
+      if (param.startsWith("challenge_")) {
+        const challengeId = param.replace("challenge_", "");
+        await upsertUser(from.id, from.first_name, from.last_name, from.username);
         await handleChallengeStart(bot, from.id, challengeId);
         return;
       }
 
-      const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, from.id)).limit(1);
-
-      if (user?.targetExamSub) {
-        await ctx.reply(DASHBOARD_MSG(user.fullName, user.targetExamSub, user.tier), { parse_mode: "MarkdownV2" });
-        return;
+      let referredBy: number | undefined;
+      if (param.startsWith("ref_")) {
+        const refId = parseInt(param.replace("ref_", ""), 10);
+        if (!isNaN(refId) && refId !== from.id) {
+          referredBy = refId;
+        }
       }
 
-      updateSession(from.id, { onboardingStep: "idle" });
-      await ctx.reply(WELCOME_MSG, { parse_mode: "MarkdownV2", reply_markup: mainCategoryKeyboard() });
+      const isNew = await upsertUser(from.id, from.first_name, from.last_name, from.username, referredBy);
+      const botUsername = ctx.me.username ?? "gt_testprobot";
+      const refLink = `https://t.me/${botUsername}?start=ref_${from.id}`;
+
+      if (isNew) {
+        updateSession(from.id, { onboardingStep: "idle" });
+        if (referredBy) {
+          await ctx.reply(`🎉 You joined via a referral link\\!\n\nWelcome to *Series TestPro\\!*`, { parse_mode: "MarkdownV2" });
+        }
+        await ctx.reply(WELCOME_MSG, { parse_mode: "MarkdownV2", reply_markup: mainCategoryKeyboard() });
+      } else {
+        const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, from.id)).limit(1);
+        const sub = user?.targetExamSub ?? "Not set";
+        const tier = user?.tier ?? "Free";
+        await ctx.reply(dashboardMsg(from.first_name, sub, tier, refLink), { parse_mode: "MarkdownV2" });
+      }
     } catch (err) {
-      logger.error({ err }, "Error in /start");
-      await ctx.reply("❌ Something went wrong. Please try /start again.");
+      logger.error({ err }, "start command error");
+      await ctx.reply("⚠️ Something went wrong. Please try /start again.");
     }
   });
 
-  bot.callbackQuery("cat_ssc", async (ctx) => {
+  bot.callbackQuery(/^cat_main_/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    updateSession(ctx.from.id, { onboardingStep: "awaiting_subcategory", pendingCategory: "SSC Exams" });
-    await ctx.editMessageText("🏆 *SSC Exams* — Choose your sub\\-category:", {
-      parse_mode: "MarkdownV2", reply_markup: sscSubKeyboard(),
-    });
+    const category = ctx.callbackQuery.data.replace("cat_main_", "");
+    updateSession(ctx.from.id, { onboardingStep: "awaiting_subcategory", pendingCategory: category });
+
+    let kb;
+    if (category === "SSC") kb = sscSubKeyboard();
+    else if (category === "Railway") kb = railwaySubKeyboard();
+    else if (category === "Banking") kb = bankingSubKeyboard();
+    else kb = biharSubKeyboard();
+
+    await ctx.editMessageText(
+      `📚 *${escMd(category)} Exams*\n\nSelect your target exam:`,
+      { parse_mode: "MarkdownV2", reply_markup: kb }
+    );
   });
 
-  bot.callbackQuery("cat_railway", async (ctx) => {
+  bot.callbackQuery(/^cat_sub_/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    updateSession(ctx.from.id, { onboardingStep: "awaiting_subcategory", pendingCategory: "Railway Exams" });
-    await ctx.editMessageText("🚆 *Railway Exams* — Choose your sub\\-category:", {
-      parse_mode: "MarkdownV2", reply_markup: railwaySubKeyboard(),
-    });
-  });
+    const userId = ctx.from.id;
+    const sub = ctx.callbackQuery.data.replace("cat_sub_", "").replace(/_/g, " ");
+    const session = getSession(userId);
+    const main = session.pendingCategory ?? "SSC";
 
-  bot.callbackQuery("cat_banking", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    updateSession(ctx.from.id, { onboardingStep: "awaiting_subcategory", pendingCategory: "Banking Exams" });
-    await ctx.editMessageText("🏢 *Banking Exams* — Choose your sub\\-category:", {
-      parse_mode: "MarkdownV2", reply_markup: bankingSubKeyboard(),
-    });
-  });
+    await db.update(usersTable).set({ targetExamMain: main, targetExamSub: sub }).where(eq(usersTable.userId, userId));
+    updateSession(userId, { onboardingStep: "idle", pendingCategory: undefined });
 
-  bot.callbackQuery("cat_bihar", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    updateSession(ctx.from.id, { onboardingStep: "awaiting_subcategory", pendingCategory: "Bihar Govt Exams" });
-    await ctx.editMessageText("🗺️ *Bihar Govt Exams* — Choose your sub\\-category:", {
-      parse_mode: "MarkdownV2", reply_markup: biharSubKeyboard(),
-    });
-  });
+    const botUsername = ctx.me.username ?? "gt_testprobot";
+    const refLink = `https://t.me/${botUsername}?start=ref_${userId}`;
 
-  bot.callbackQuery("back_main", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    updateSession(ctx.from.id, { onboardingStep: "idle", pendingCategory: undefined });
-    await ctx.editMessageText(WELCOME_MSG, { parse_mode: "MarkdownV2", reply_markup: mainCategoryKeyboard() });
-  });
-
-  bot.callbackQuery(/^sub_/, async (ctx) => {
-    try {
-      await ctx.answerCallbackQuery();
-      const data = ctx.callbackQuery.data.slice(4);
-      const underscoreIdx = data.indexOf("_");
-      const mainCategory = data.slice(0, underscoreIdx);
-      const subCategory = data.slice(underscoreIdx + 1).replace(/_/g, " ");
-      const userId = ctx.from.id;
-
-      await db.update(usersTable)
-        .set({ targetExamMain: mainCategory, targetExamSub: subCategory })
-        .where(eq(usersTable.userId, userId));
-
-      updateSession(userId, { onboardingStep: "idle", pendingCategory: undefined });
-
-      await ctx.editMessageText(
-        `✅ *Profile Complete\\!*\n\nYour target is set to: *${escMd(subCategory)}*\n\nYou now have access to all mock tests, detailed solutions, and premium resources for this exam\\.\n\nUse /test\\_series to start practicing\\.`,
-        { parse_mode: "MarkdownV2" }
-      );
-    } catch (err) {
-      logger.error({ err }, "Error in sub_ callback");
-    }
+    await ctx.editMessageText(
+      `✅ *Target set: ${escMd(sub)}*\n\n🎉 Welcome to *Series TestPro\\!*\n\nYour exam preparation starts now\\.\n\n👥 *Your Referral Link:*\n\`${escMd(refLink)}\`\n\n📚 Use /test\\_series to start practicing\\!`,
+      { parse_mode: "MarkdownV2" }
+    );
   });
 }
