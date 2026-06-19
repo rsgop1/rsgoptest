@@ -8,13 +8,15 @@ import {
   globalConfigTable,
   flashSalesTable,
   userHistoryTable,
+  adsTable,
 } from "@workspace/db";
 import { eq, and, count, gte, sql, desc, gt } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
 import { getApi } from "../bot/api-instance.js";
-import { setConfig } from "../bot/handlers/helpers.js";
+import { setConfig, getConfig } from "../bot/handlers/helpers.js";
 import { logger } from "../lib/logger.js";
-import { createHmac } from "crypto";
+import { telemetryEmitter, getRecentEvents, emitTelemetry } from "../lib/telemetry.js";
+import { createHmac, randomBytes } from "crypto";
 
 const ADMIN_PASSWORD = "rsg@123";
 const COOKIE_NAME = "tbadmin";
@@ -44,6 +46,10 @@ function isAuthenticated(req: Request): boolean {
 function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (isAuthenticated(req)) return next();
   res.status(401).json({ error: "Not authenticated" });
+}
+
+function generateTestId(): string {
+  return randomBytes(3).toString("hex");
 }
 
 const router = Router();
@@ -140,18 +146,15 @@ router.post("/payments/:paymentId/approve", requireAuth, async (req: Request, re
     const api = getApi();
     if (payment.testId && payment.testId !== "premium") {
       await db.insert(purchasedTestsTable).values({ userId: payment.userId, testId: payment.testId }).catch(() => {});
-      await api.sendMessage(payment.userId,
-        `✅ Payment Approved!\n\nYour UPI payment has been verified! Test unlocked.\n\nUse /test_series to access it.`,
-      ).catch(() => {});
+      await api.sendMessage(payment.userId, `✅ Payment Approved!\n\nYour UPI payment has been verified! Test unlocked.\n\nUse /test_series to access it.`).catch(() => {});
     } else {
       const expiry = new Date();
       expiry.setDate(expiry.getDate() + 30);
       await db.update(usersTable).set({ tier: "Premium", premiumExpiry: expiry }).where(eq(usersTable.userId, payment.userId));
-      await api.sendMessage(payment.userId,
-        `💎 Premium Activated!\n\nYour payment has been verified. Series TestPro Premium is now active for 30 days!\n\nUse /test_series to access all tests.`,
-      ).catch(() => {});
+      await api.sendMessage(payment.userId, `💎 Premium Activated!\n\nYour payment has been verified. Series TestPro Premium is now active for 30 days!\n\nUse /test_series to access all tests.`).catch(() => {});
     }
 
+    emitTelemetry(`User ${payment.userId} paid ₹${payment.amount} via ${payment.method} — Approved`);
     res.json({ success: true, message: "Payment approved" });
   } catch (err) {
     logger.error({ err }, "Error approving payment");
@@ -166,9 +169,7 @@ router.post("/payments/:paymentId/reject", requireAuth, async (req: Request, res
     if (payment) {
       await db.update(paymentsTable).set({ status: "Rejected" }).where(eq(paymentsTable.paymentId, paymentId));
       const api = getApi();
-      await api.sendMessage(payment.userId,
-        `❌ Payment Rejected\n\nYour payment screenshot could not be verified. Please send a valid screenshot or contact admin.`,
-      ).catch(() => {});
+      await api.sendMessage(payment.userId, `❌ Payment Rejected\n\nYour payment screenshot could not be verified. Please send a valid screenshot or contact admin.`).catch(() => {});
     }
     res.json({ success: true, message: "Payment rejected" });
   } catch (err) {
@@ -221,7 +222,8 @@ router.get("/tests", requireAuth, async (_req: Request, res: Response) => {
 router.post("/tests", requireAuth, async (req: Request, res: Response) => {
   try {
     const body = req.body as Record<string, string | number>;
-    const { testId, testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, questionsJson, timerSeconds, language } = body as Record<string, string>;
+    const { testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, questionsJson, timerSeconds, language } = body as Record<string, string>;
+
     let questions: unknown[];
     try {
       questions = JSON.parse(questionsJson ?? "[]");
@@ -231,11 +233,12 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
       return;
     }
 
+    const autoTestId = generateTestId();
     const lang = (language ?? "en") as "en" | "hi";
     const timerSec = Math.max(10, parseInt(String(timerSeconds ?? "30")) || 30);
 
     const questionsWithIds = (questions as QuestionData[]).map((q, i) => ({
-      id: `${testId}_q${i}`,
+      id: `${autoTestId}_q${i}`,
       question: q.question ?? "",
       options: q.options ?? [],
       correctOptionIndex: q.correctOptionIndex ?? 0,
@@ -244,7 +247,7 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
     }));
 
     const [inserted] = await db.insert(testSeriesTable).values({
-      testId,
+      testId: autoTestId,
       testName,
       mainCategory,
       subCategory,
@@ -254,21 +257,9 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
       priceInStars: parseInt(String(priceInStars ?? "0")),
       questionsData: questionsWithIds,
       timerSeconds: timerSec,
-    }).onConflictDoUpdate({
-      target: testSeriesTable.testId,
-      set: {
-        testName,
-        mainCategory,
-        subCategory,
-        positiveMarking: parseFloat(String(positiveMarking ?? "1")),
-        negativeMarking: parseFloat(String(negativeMarking ?? "0.25")),
-        priceInr: parseInt(String(priceInr ?? "0")),
-        priceInStars: parseInt(String(priceInStars ?? "0")),
-        questionsData: questionsWithIds,
-        timerSeconds: timerSec,
-      },
     }).returning();
 
+    emitTelemetry(`New test imported: "${testName}" (ID: ${autoTestId}) — ${questionsWithIds.length} questions`);
     res.status(201).json({
       id: inserted!.id,
       testId: inserted!.testId,
@@ -287,6 +278,66 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "Error importing test");
     res.status(500).json({ error: "Failed to import test" });
+  }
+});
+
+router.put("/tests/:testId", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const testId = String(req.params["testId"]);
+    const body = req.body as Record<string, string | number>;
+    const { testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, timerSeconds, language, questionsJson } = body as Record<string, string>;
+
+    const updateData: Record<string, unknown> = {};
+    if (testName !== undefined) updateData["testName"] = testName;
+    if (mainCategory !== undefined) updateData["mainCategory"] = mainCategory;
+    if (subCategory !== undefined) updateData["subCategory"] = subCategory;
+    if (positiveMarking !== undefined) updateData["positiveMarking"] = parseFloat(String(positiveMarking));
+    if (negativeMarking !== undefined) updateData["negativeMarking"] = parseFloat(String(negativeMarking));
+    if (priceInr !== undefined) updateData["priceInr"] = parseInt(String(priceInr));
+    if (priceInStars !== undefined) updateData["priceInStars"] = parseInt(String(priceInStars));
+    if (timerSeconds !== undefined) updateData["timerSeconds"] = Math.max(10, parseInt(String(timerSeconds)) || 30);
+
+    if (questionsJson) {
+      let questions: unknown[];
+      try {
+        questions = JSON.parse(questionsJson);
+        if (!Array.isArray(questions)) throw new Error("Not an array");
+      } catch {
+        res.status(400).json({ error: "Invalid questions JSON" });
+        return;
+      }
+      const lang = (language ?? "en") as "en" | "hi";
+      updateData["questionsData"] = (questions as QuestionData[]).map((q, i) => ({
+        id: `${testId}_q${i}`,
+        question: q.question ?? "",
+        options: q.options ?? [],
+        correctOptionIndex: q.correctOptionIndex ?? 0,
+        explanation: q.explanation ?? "",
+        language: q.language ?? lang,
+      }));
+    }
+
+    await db.update(testSeriesTable).set(updateData as any).where(eq(testSeriesTable.testId, testId));
+    const [updated] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
+    if (!updated) { res.status(404).json({ error: "Test not found" }); return; }
+
+    emitTelemetry(`Test updated: "${updated.testName}" (ID: ${testId})`);
+    res.json({
+      testId: updated.testId,
+      testName: updated.testName,
+      mainCategory: updated.mainCategory,
+      subCategory: updated.subCategory,
+      positiveMarking: updated.positiveMarking,
+      negativeMarking: updated.negativeMarking,
+      priceInr: updated.priceInr,
+      priceInStars: updated.priceInStars,
+      isActive: updated.isActive,
+      timerSeconds: updated.timerSeconds,
+      questionCount: Array.isArray(updated.questionsData) ? updated.questionsData.length : 0,
+    });
+  } catch (err) {
+    logger.error({ err }, "Error editing test");
+    res.status(500).json({ error: "Failed to edit test" });
   }
 });
 
@@ -329,9 +380,7 @@ router.get("/tests/:testId/analytics", requireAuth, async (req: Request, res: Re
     const userMap = new Map<number, { score: number }>();
     for (const h of history) {
       const existing = userMap.get(h.userId);
-      if (!existing || h.score > existing.score) {
-        userMap.set(h.userId, { score: h.score });
-      }
+      if (!existing || h.score > existing.score) userMap.set(h.userId, { score: h.score });
     }
     const topUserIds = [...userMap.entries()].sort((a, b) => b[1].score - a[1].score).slice(0, 5);
     const topScorers: Array<{ userId: number; score: number; name: string }> = [];
@@ -371,6 +420,132 @@ router.get("/tests/:testId/analytics", requireAuth, async (req: Request, res: Re
   }
 });
 
+router.get("/categories", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const raw = await getConfig("categories");
+    const cats = raw ? JSON.parse(raw) as Record<string, string[]> : {
+      SSC: ["CGL", "CHSL", "Stenographer", "MTS", "GD Constable", "Selection Post"],
+      Railway: ["RRB NTPC", "RRC Group D", "RRB ALP", "RPF SI"],
+      Banking: ["IBPS PO", "IBPS Clerk", "SBI PO", "SBI Clerk"],
+      Bihar: ["BPSC Pre", "BSSC Inter Level", "Bihar Police SI", "BTSC"],
+    };
+    res.json(cats);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load categories" });
+  }
+});
+
+router.post("/categories", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { main, sub } = req.body as { main: string; sub?: string };
+    const raw = await getConfig("categories");
+    const cats = raw ? JSON.parse(raw) as Record<string, string[]> : {};
+
+    if (!cats[main]) cats[main] = [];
+    if (sub && !cats[main]!.includes(sub)) cats[main]!.push(sub);
+
+    await setConfig("categories", JSON.stringify(cats));
+    res.json(cats);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update categories" });
+  }
+});
+
+router.delete("/categories/:main/:sub", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const main = String(req.params["main"] ?? "");
+    const sub = String(req.params["sub"] ?? "");
+    const raw = await getConfig("categories");
+    const cats = raw ? JSON.parse(raw) as Record<string, string[]> : {};
+    if (cats[main]) cats[main] = cats[main]!.filter(s => s !== sub);
+    await setConfig("categories", JSON.stringify(cats));
+    res.json(cats);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete subcategory" });
+  }
+});
+
+router.get("/ads", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const ads = await db.select().from(adsTable).orderBy(desc(adsTable.createdAt));
+    res.json(ads);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load ads" });
+  }
+});
+
+router.post("/ads", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { title, mediaType, telegramFileId, adText, buttonText, buttonUrl, frequencyEvery } = req.body as Record<string, string>;
+    const [ad] = await db.insert(adsTable).values({
+      title,
+      mediaType: mediaType ?? "image",
+      telegramFileId: telegramFileId || null,
+      adText: adText || null,
+      buttonText: buttonText || null,
+      buttonUrl: buttonUrl || null,
+      frequencyEvery: parseInt(String(frequencyEvery ?? "1")) || 1,
+    }).returning();
+    emitTelemetry(`New ad created: "${title}"`);
+    res.status(201).json(ad);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to create ad" });
+  }
+});
+
+router.patch("/ads/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(String(req.params["id"] ?? "0"));
+    const { isActive } = req.body as { isActive?: boolean };
+    if (isActive !== undefined) {
+      await db.update(adsTable).set({ isActive }).where(eq(adsTable.id, id));
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update ad" });
+  }
+});
+
+router.delete("/ads/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    await db.delete(adsTable).where(eq(adsTable.id, parseInt(String(req.params["id"] ?? "0"))));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete ad" });
+  }
+});
+
+router.get("/telemetry/stream", requireAuth, (req: Request, res: Response) => {
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders();
+
+  const recent = getRecentEvents(150);
+  for (const line of recent) {
+    res.write(`data: ${JSON.stringify(line)}\n\n`);
+  }
+
+  const onEvent = (line: string) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(line)}\n\n`);
+  };
+
+  telemetryEmitter.on("event", onEvent);
+
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write(`: ping\n\n`);
+    else clearInterval(heartbeat);
+  }, 25000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    telemetryEmitter.off("event", onEvent);
+  });
+});
+
 router.get("/flash-sales", requireAuth, async (_req: Request, res: Response) => {
   try {
     const sales = await db.select().from(flashSalesTable).orderBy(desc(flashSalesTable.createdAt));
@@ -391,14 +566,9 @@ router.get("/flash-sales", requireAuth, async (_req: Request, res: Response) => 
 
 router.post("/flash-sales", requireAuth, async (req: Request, res: Response) => {
   try {
-    const { testId, discountInr, discountStars, endsAt } = req.body as {
-      testId: string; discountInr: number; discountStars: number; endsAt: string;
-    };
+    const { testId, discountInr, discountStars, endsAt } = req.body as { testId: string; discountInr: number; discountStars: number; endsAt: string };
     const [inserted] = await db.insert(flashSalesTable).values({
-      testId,
-      discountInr: Number(discountInr),
-      discountStars: Number(discountStars),
-      endsAt: new Date(endsAt),
+      testId, discountInr: Number(discountInr), discountStars: Number(discountStars), endsAt: new Date(endsAt),
     }).returning();
 
     res.status(201).json({
@@ -421,7 +591,6 @@ router.delete("/flash-sales/:id", requireAuth, async (req: Request, res: Respons
     await db.delete(flashSalesTable).where(eq(flashSalesTable.id, Number(req.params["id"])));
     res.json({ success: true, message: "Flash sale deleted" });
   } catch (err) {
-    logger.error({ err }, "Error deleting flash sale");
     res.status(500).json({ error: "Failed to delete flash sale" });
   }
 });
@@ -434,6 +603,7 @@ router.get("/settings", requireAuth, async (_req: Request, res: Response) => {
       admin_upi_vpa: cfg["admin_upi_vpa"] ?? "",
       force_sub_enabled: cfg["force_sub_enabled"] ?? "false",
       force_sub_channel: cfg["force_sub_channel"] ?? "",
+      leaderboard_channel: cfg["leaderboard_channel"] ?? "",
     });
   } catch (err) {
     logger.error({ err }, "Admin settings error");
@@ -477,6 +647,7 @@ router.post("/broadcast", requireAuth, async (req: Request, res: Response) => {
         await new Promise((r) => setTimeout(r, 50));
       } catch { failed++; }
     }
+    emitTelemetry(`Broadcast sent to ${sent} users (${failed} failed)`);
     res.json({ sent, failed });
   } catch (err) {
     logger.error({ err }, "Broadcast error");

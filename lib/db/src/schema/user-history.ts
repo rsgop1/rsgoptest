@@ -1,4 +1,4 @@
-import { pgTable, serial, bigint, text, doublePrecision, integer, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigint, text, doublePrecision, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -12,6 +12,7 @@ export const userHistoryTable = pgTable("user_history", {
   wrongCount: integer("wrong_count").notNull(),
   skippedCount: integer("skipped_count").notNull(),
   accuracy: doublePrecision("accuracy").notNull(),
+  userAnswers: jsonb("user_answers").$type<(number | null)[]>(),
   completedAt: timestamp("completed_at").notNull().defaultNow(),
 });
 

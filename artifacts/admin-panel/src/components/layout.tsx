@@ -15,6 +15,8 @@ import {
   LogOut,
   Menu,
   BarChart2,
+  Megaphone,
+  Terminal,
 } from "lucide-react";
 import { ReactNode } from "react";
 
@@ -24,8 +26,10 @@ const navItems = [
   { href: "/tests", label: "Test Series", icon: FileText },
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/flash-sales", label: "Flash Sales", icon: Tag },
+  { href: "/ads", label: "Ad Gateway", icon: Megaphone },
   { href: "/users", label: "Users", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/telemetry", label: "Live Terminal", icon: Terminal },
 ];
 
 function NavLinks({ location, onNavigate }: { location: string; onNavigate?: () => void }) {
@@ -95,7 +99,6 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-muted/40">
-      {/* Desktop Sidebar */}
       <aside className="w-64 border-r bg-card flex-col hidden md:flex">
         <div className="p-6 border-b">
           <h1 className="text-xl font-bold tracking-tight text-primary">Series TestPro</h1>
@@ -115,9 +118,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      {/* Mobile Layout */}
       <div className="flex flex-col flex-1 overflow-hidden md:contents">
-        {/* Mobile Top Bar */}
         <header className="flex md:hidden items-center justify-between px-4 py-3 bg-card border-b shrink-0">
           <div>
             <h1 className="text-base font-bold text-primary">Series TestPro</h1>
@@ -157,7 +158,6 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        {/* Main Content */}
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="mx-auto max-w-6xl space-y-6">
             {children}

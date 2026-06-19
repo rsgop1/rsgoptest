@@ -2,12 +2,103 @@ import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { db } from "@workspace/db";
 import { userHistoryTable, testSeriesTable, usersTable } from "@workspace/db";
-import { eq, desc, avg, count, sql } from "drizzle-orm";
+import { eq, desc, avg, count, sql, max } from "drizzle-orm";
 import { logger } from "../../lib/logger.js";
+import { getConfig, setConfig } from "./helpers.js";
+import { getApi } from "../api-instance.js";
+import { emitTelemetry } from "../../lib/telemetry.js";
 
-function progressBar(value: number, max: number, length = 10): string {
-  const filled = Math.round((value / max) * length);
-  return "█".repeat(filled) + "░".repeat(length - filled);
+function escMd(text: string): string {
+  return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
+}
+
+async function buildLeaderboardText(testId?: string): Promise<string> {
+  const medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
+
+  if (testId) {
+    const [test] = await db.select({ testName: testSeriesTable.testName }).from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
+    const topRows = await db
+      .select({
+        userId: userHistoryTable.userId,
+        bestScore: max(userHistoryTable.score),
+        attempts: count(userHistoryTable.id),
+      })
+      .from(userHistoryTable)
+      .where(eq(userHistoryTable.testId, testId))
+      .groupBy(userHistoryTable.userId)
+      .orderBy(desc(max(userHistoryTable.score)))
+      .limit(10);
+
+    if (!topRows.length) return `🏆 *Leaderboard — ${escMd(test?.testName ?? testId)}*\n\n_No attempts yet\\._`;
+
+    const userIds = topRows.map(r => r.userId);
+    const users = await db.select({ userId: usersTable.userId, fullName: usersTable.fullName }).from(usersTable)
+      .where(sql`${usersTable.userId} = ANY(ARRAY[${sql.join(userIds.map(id => sql`${id}`), sql`,`)}]::bigint[])`);
+    const nameMap = new Map(users.map(u => [u.userId, u.fullName]));
+
+    let text = `🏆 *${escMd(test?.testName ?? testId)} Leaderboard*\n\n`;
+    topRows.forEach((r, i) => {
+      const name = (nameMap.get(r.userId) ?? String(r.userId)).slice(0, 18);
+      text += `${medals[i] ?? `${i + 1}\\.`} *${escMd(name)}* — ${escMd(String(r.bestScore))}\n`;
+    });
+    text += `\n_Updated: ${new Date().toLocaleTimeString("en-IN")}_`;
+    return text;
+  } else {
+    const topRows = await db
+      .select({
+        userId: userHistoryTable.userId,
+        totalTests: count(userHistoryTable.id),
+        avgAccuracy: avg(userHistoryTable.accuracy),
+      })
+      .from(userHistoryTable)
+      .groupBy(userHistoryTable.userId)
+      .orderBy(desc(avg(userHistoryTable.accuracy)), desc(count(userHistoryTable.id)))
+      .limit(10);
+
+    if (!topRows.length) return `🌍 *Global Leaderboard*\n\n_No attempts yet\\._`;
+
+    const userIds = topRows.map(r => r.userId);
+    const users = await db.select({ userId: usersTable.userId, fullName: usersTable.fullName }).from(usersTable)
+      .where(sql`${usersTable.userId} = ANY(ARRAY[${sql.join(userIds.map(id => sql`${id}`), sql`,`)}]::bigint[])`);
+    const nameMap = new Map(users.map(u => [u.userId, u.fullName]));
+
+    let text = `🌍 *Global Leaderboard*\n_Ranked by accuracy across all tests_\n\n`;
+    topRows.forEach((r, i) => {
+      const name = (nameMap.get(r.userId) ?? String(r.userId)).slice(0, 18);
+      const acc = parseFloat(String(r.avgAccuracy ?? 0)).toFixed(1);
+      text += `${medals[i] ?? `${i + 1}\\.`} *${escMd(name)}* — ${escMd(acc)}% \\(${r.totalTests} tests\\)\n`;
+    });
+    text += `\n_Updated: ${escMd(new Date().toLocaleTimeString("en-IN"))} IST_`;
+    return text;
+  }
+}
+
+export async function updateChannelLeaderboard(): Promise<void> {
+  try {
+    const channel = await getConfig("leaderboard_channel");
+    if (!channel) return;
+
+    const text = await buildLeaderboardText();
+    const api = getApi();
+    const pinnedMsgId = await getConfig("leaderboard_pinned_msg_id");
+
+    if (pinnedMsgId) {
+      try {
+        await api.editMessageText(channel, parseInt(pinnedMsgId), text, { parse_mode: "MarkdownV2" });
+        emitTelemetry(`Leaderboard updated in channel ${channel}`);
+        return;
+      } catch {
+        // Message might have been deleted, send a new one
+      }
+    }
+
+    const newMsg = await api.sendMessage(channel, text, { parse_mode: "MarkdownV2" });
+    await setConfig("leaderboard_pinned_msg_id", String(newMsg.message_id));
+    try { await api.pinChatMessage(channel, newMsg.message_id, { disable_notification: true }); } catch { }
+    emitTelemetry(`Leaderboard created & pinned in channel ${channel}`);
+  } catch (err) {
+    logger.error({ err }, "Error updating channel leaderboard");
+  }
 }
 
 export function registerLeaderboardHandlers(bot: Bot): void {
@@ -32,107 +123,20 @@ export function registerLeaderboardHandlers(bot: Bot): void {
         reply_markup: kb,
       });
     } catch (err) {
-      logger.error({ err }, "leaderboard command error");
-    }
-  });
-
-  bot.callbackQuery("lb_global", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    try {
-      const top = await db
-        .select({
-          userId: userHistoryTable.userId,
-          avgScore: avg(userHistoryTable.score).as("avg_score"),
-          avgAccuracy: avg(userHistoryTable.accuracy).as("avg_accuracy"),
-          tests: count(userHistoryTable.id).as("tests"),
-        })
-        .from(userHistoryTable)
-        .groupBy(userHistoryTable.userId)
-        .orderBy(desc(sql`avg_score`))
-        .limit(10);
-
-      if (!top.length) {
-        await ctx.editMessageText("🏆 *Global Leaderboard*\n\nNo data yet\\. Be the first to complete a test\\!", { parse_mode: "MarkdownV2" });
-        return;
-      }
-
-      const userIds = top.map(r => r.userId);
-      const users = await db.select({ userId: usersTable.userId, fullName: usersTable.fullName })
-        .from(usersTable).where(sql`${usersTable.userId} = ANY(ARRAY[${sql.join(userIds.map(id => sql`${id}`), sql`,`)}]::bigint[])`);
-      const nameMap = new Map(users.map(u => [u.userId, u.fullName]));
-
-      const medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
-      let text = "🏆 *GLOBAL LEADERBOARD — TOP 10*\n\n";
-      text += "```\n";
-      text += `${"Rank".padEnd(6)} ${"Name".padEnd(18)} ${"Avg%".padEnd(7)} Tests\n`;
-      text += "─".repeat(40) + "\n";
-
-      top.forEach((row, i) => {
-        const name = (nameMap.get(row.userId) ?? "Unknown").slice(0, 16);
-        const acc = parseFloat(String(row.avgAccuracy ?? 0)).toFixed(1);
-        const tests = row.tests;
-        text += `${medals[i] ?? `#${i + 1}`} ${name.padEnd(18)} ${(acc + "%").padEnd(7)} ${tests}\n`;
-      });
-      text += "```";
-
-      await ctx.editMessageText(text, { parse_mode: "MarkdownV2" });
-    } catch (err) {
-      logger.error({ err }, "lb_global error");
+      logger.error({ err }, "leaderboard error");
     }
   });
 
   bot.callbackQuery(/^lb_test_/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const testId = ctx.callbackQuery.data.replace("lb_test_", "");
-    try {
-      const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
-      if (!test) { await ctx.reply("Test not found."); return; }
-
-      const top = await db
-        .select({
-          userId: userHistoryTable.userId,
-          score: userHistoryTable.score,
-          accuracy: userHistoryTable.accuracy,
-          correct: userHistoryTable.correctCount,
-        })
-        .from(userHistoryTable)
-        .where(eq(userHistoryTable.testId, testId))
-        .orderBy(desc(userHistoryTable.score))
-        .limit(10);
-
-      if (!top.length) {
-        await ctx.editMessageText(`🏆 *${escMd(test.testName)}*\n\nNo one has attempted this test yet\\. Be the first\\!`, { parse_mode: "MarkdownV2" });
-        return;
-      }
-
-      const userIds = top.map(r => r.userId);
-      const users = await db.select({ userId: usersTable.userId, fullName: usersTable.fullName })
-        .from(usersTable).where(sql`${usersTable.userId} = ANY(ARRAY[${sql.join(userIds.map(id => sql`${id}`), sql`,`)}]::bigint[])`);
-      const nameMap = new Map(users.map(u => [u.userId, u.fullName]));
-
-      const myRank = top.findIndex(r => r.userId === ctx.from.id);
-      const medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
-
-      let text = `🏆 *LEADERBOARD: ${escMd(test.testName)}*\n\n`;
-      text += "```\n";
-      text += `${"Rank".padEnd(5)} ${"Name".padEnd(16)} ${"Score".padEnd(8)} Acc%\n`;
-      text += "─".repeat(38) + "\n";
-      top.forEach((row, i) => {
-        const name = (nameMap.get(row.userId) ?? "Unknown").slice(0, 14);
-        const marker = row.userId === ctx.from.id ? " ◀" : "";
-        text += `${medals[i] ?? `#${i + 1}`}  ${name.padEnd(16)} ${String(row.score).padEnd(8)} ${row.accuracy.toFixed(1)}%${marker}\n`;
-      });
-      text += "```";
-
-      if (myRank >= 0) text += `\n\n👤 Your rank: *\\#${myRank + 1}*`;
-
-      await ctx.editMessageText(text, { parse_mode: "MarkdownV2" });
-    } catch (err) {
-      logger.error({ err }, "lb_test error");
-    }
+    const text = await buildLeaderboardText(testId);
+    await ctx.editMessageText(text, { parse_mode: "MarkdownV2" });
   });
-}
 
-function escMd(text: string): string {
-  return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
+  bot.callbackQuery("lb_global", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const text = await buildLeaderboardText();
+    await ctx.editMessageText(text, { parse_mode: "MarkdownV2" });
+  });
 }

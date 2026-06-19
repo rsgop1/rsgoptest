@@ -7,3 +7,4 @@ export * from "./global-config";
 export * from "./purchased-tests";
 export * from "./flash-sales";
 export * from "./challenges";
+export * from "./ads";

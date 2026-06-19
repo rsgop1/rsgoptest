@@ -8,6 +8,8 @@ export interface QuizSession {
   correctCount: number;
   wrongCount: number;
   skippedCount: number;
+  userAnswers: (number | null)[];
+  pollMessageIds: number[];
   wrongQuestionIds: Array<{ testId: string; questionIndex: number }>;
   currentPollMessageId?: number;
   currentPollId?: string;
@@ -23,6 +25,13 @@ export interface SolutionSession {
   questions: QuestionData[];
   userAnswers: (number | null)[];
   currentIndex: number;
+  attemptId?: number;
+}
+
+export interface AdSession {
+  testId: string;
+  adMessageId: number;
+  skipTimer?: ReturnType<typeof setTimeout>;
 }
 
 export interface PendingUpiPayment {
@@ -37,6 +46,7 @@ export interface UserSession {
   quiz?: QuizSession;
   solution?: SolutionSession;
   pendingUpiPayment?: PendingUpiPayment;
+  pendingAd?: AdSession;
 }
 
 const sessions = new Map<number, UserSession>();
@@ -56,7 +66,8 @@ export function updateSession(userId: number, data: Partial<UserSession>): void 
 export function clearQuiz(userId: number): void {
   const s = getSession(userId);
   if (s.quiz?.timer) clearTimeout(s.quiz.timer);
-  updateSession(userId, { quiz: undefined });
+  if (s.pendingAd?.skipTimer) clearTimeout(s.pendingAd.skipTimer);
+  updateSession(userId, { quiz: undefined, pendingAd: undefined });
 }
 
 export function clearSolution(userId: number): void {

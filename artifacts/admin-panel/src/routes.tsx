@@ -8,6 +8,8 @@ import Analytics from "./pages/analytics";
 import FlashSales from "./pages/flash-sales";
 import Settings from "./pages/settings";
 import Users from "./pages/users";
+import Ads from "./pages/ads";
+import Telemetry from "./pages/telemetry";
 
 function AppRoutes() {
   return (
@@ -31,11 +33,17 @@ function AppRoutes() {
       <Route path="/flash-sales">
         <Layout><FlashSales /></Layout>
       </Route>
+      <Route path="/ads">
+        <Layout><Ads /></Layout>
+      </Route>
       <Route path="/users">
         <Layout><Users /></Layout>
       </Route>
       <Route path="/settings">
         <Layout><Settings /></Layout>
+      </Route>
+      <Route path="/telemetry">
+        <Layout><Telemetry /></Layout>
       </Route>
       <Route>
         <Layout><div className="flex items-center justify-center h-[50vh] text-2xl font-bold text-muted-foreground">Page Not Found</div></Layout>

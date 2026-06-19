@@ -1,17 +1,17 @@
 import type { Bot } from "grammy";
 import { db } from "@workspace/db";
 import { userHistoryTable, wrongQuestionsTable, usersTable, testSeriesTable } from "@workspace/db";
-import { eq, count, avg, sum, desc, sql } from "drizzle-orm";
+import { eq, count, desc, sql } from "drizzle-orm";
 import { logger } from "../../lib/logger.js";
-
-function bar(value: number, max: number, length = 12): string {
-  if (max === 0) return "░".repeat(length);
-  const filled = Math.min(Math.round((value / max) * length), length);
-  return "█".repeat(filled) + "░".repeat(length - filled);
-}
 
 function escMd(t: string): string {
   return t.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
+}
+
+function miniBar(value: number, max: number, length = 8): string {
+  if (max === 0) return "░".repeat(length);
+  const filled = Math.min(Math.round((value / max) * length), length);
+  return "█".repeat(filled) + "░".repeat(length - filled);
 }
 
 export function registerStatsHandlers(bot: Bot): void {
@@ -32,7 +32,10 @@ export function registerStatsHandlers(bot: Bot): void {
         .orderBy(desc(userHistoryTable.completedAt));
 
       if (!history.length) {
-        await ctx.reply("📊 *Your Stats*\n\nNo tests attempted yet\\. Use /test\\_series to get started\\!", { parse_mode: "MarkdownV2" });
+        await ctx.reply(
+          `📊 *Your Stats*\n\n👤 *${escMd(user.fullName)}*\n🎯 Target: *${escMd(user.targetExamSub ?? "Not set")}*\n\nNo tests attempted yet\\.\nUse /test\\_series to start\\! 🚀`,
+          { parse_mode: "MarkdownV2" }
+        );
         return;
       }
 
@@ -42,67 +45,47 @@ export function registerStatsHandlers(bot: Bot): void {
       const totalSkipped = history.reduce((s, h) => s + h.skippedCount, 0);
       const totalAnswered = totalCorrect + totalWrong;
       const overallAccuracy = totalAnswered > 0 ? (totalCorrect / totalAnswered) * 100 : 0;
-      const bestScore = Math.max(...history.map(h => h.accuracy));
-      const avgScore = history.reduce((s, h) => s + h.accuracy, 0) / totalTests;
+      const bestAccuracy = Math.max(...history.map(h => h.accuracy));
+      const avgAccuracy = history.reduce((s, h) => s + h.accuracy, 0) / totalTests;
+
       const [wrongCount] = await db.select({ cnt: count() }).from(wrongQuestionsTable).where(eq(wrongQuestionsTable.userId, userId));
 
-      const byTest = new Map<string, { correct: number; total: number }>();
-      for (const h of history) {
-        const prev = byTest.get(h.testId) ?? { correct: 0, total: 0 };
-        byTest.set(h.testId, {
-          correct: prev.correct + h.correctCount,
-          total: prev.total + h.correctCount + h.wrongCount + h.skippedCount,
-        });
-      }
-
-      const recentTests = history.slice(0, 5);
-      const testIds = [...new Set(recentTests.map(h => h.testId))];
+      const testIds = [...new Set(history.slice(0, 5).map(h => h.testId))];
       const tests = await db.select({ testId: testSeriesTable.testId, testName: testSeriesTable.testName })
         .from(testSeriesTable)
         .where(sql`${testSeriesTable.testId} = ANY(ARRAY[${sql.join(testIds.map(id => sql`${id}`), sql`,`)}]::text[])`);
       const nameMap = new Map(tests.map(t => [t.testId, t.testName]));
 
-      const accBar = bar(overallAccuracy, 100);
       const tier = user.tier === "Premium" ? "💎 Premium" : "🆓 Free";
+      const trend = history.length >= 2
+        ? (history[0]!.accuracy >= history[1]!.accuracy ? "📈 Improving" : "📉 Needs work")
+        : "🆕 Just started";
 
-      let card = "```\n";
-      card += "╔══════════════════════════════╗\n";
-      card += "║   📊  YOUR PERFORMANCE CARD  ║\n";
-      card += "╠══════════════════════════════╣\n";
-      card += `║ 👤 ${user.fullName.slice(0, 24).padEnd(25)}║\n`;
-      card += `║ 🎯 ${(user.targetExamSub ?? "Not set").slice(0, 24).padEnd(25)}║\n`;
-      card += `║ ${tier.padEnd(29)}║\n`;
-      card += "╠══════════════════════════════╣\n";
-      card += `║ 📝 Tests Taken:  ${String(totalTests).padEnd(12)}║\n`;
-      card += `║ ✅ Total Correct: ${String(totalCorrect).padEnd(11)}║\n`;
-      card += `║ ❌ Total Wrong:   ${String(totalWrong).padEnd(11)}║\n`;
-      card += `║ ⏭️ Total Skipped: ${String(totalSkipped).padEnd(11)}║\n`;
-      card += "╠══════════════════════════════╣\n";
-      card += `║ 🎯 Overall Accuracy: ${overallAccuracy.toFixed(1).padEnd(9)}%║\n`;
-      card += `║    [${accBar}] ║\n`;
-      card += `║ 🔝 Best Accuracy:    ${bestScore.toFixed(1).padEnd(9)}%║\n`;
-      card += `║ 📈 Avg Accuracy:     ${avgScore.toFixed(1).padEnd(9)}%║\n`;
-      card += `║ 📓 Wrong Notebook:  ${String(wrongCount?.cnt ?? 0).padEnd(10)}Qs║\n`;
-      card += "╠══════════════════════════════╣\n";
-      card += "║   📅 RECENT ATTEMPTS          ║\n";
+      let msg = `📊 *Performance Stats*\n\n`;
+      msg += `👤 *${escMd(user.fullName)}*\n`;
+      msg += `🎯 ${escMd(user.targetExamSub ?? "Target not set")}   ${tier}\n\n`;
 
-      for (const h of recentTests.slice(0, 3)) {
-        const name = (nameMap.get(h.testId) ?? h.testId).slice(0, 18);
-        const acc = h.accuracy.toFixed(0) + "%";
-        card += `║ • ${name.padEnd(18)} ${acc.padStart(5)}║\n`;
+      msg += `📝 Tests Taken  —  *${totalTests}*\n`;
+      msg += `✅ Correct  —  *${totalCorrect}*\n`;
+      msg += `❌ Wrong  —  *${totalWrong}*\n`;
+      msg += `⏭️ Skipped  —  *${totalSkipped}*\n`;
+      msg += `📓 Notebook  —  *${wrongCount?.cnt ?? 0}* questions\n\n`;
+
+      msg += `🎯 Overall Accuracy\n`;
+      msg += `*${escMd(overallAccuracy.toFixed(1))}%*  ${miniBar(overallAccuracy, 100)}\n\n`;
+
+      msg += `🔝 Best: *${escMd(bestAccuracy.toFixed(1))}%*   📈 Avg: *${escMd(avgAccuracy.toFixed(1))}%*\n`;
+      msg += `Trend: ${escMd(trend)}\n\n`;
+
+      msg += `📅 *Recent Attempts:*\n`;
+      for (const h of history.slice(0, 5)) {
+        const name = (nameMap.get(h.testId) ?? h.testId).slice(0, 20);
+        const acc = h.accuracy.toFixed(0);
+        const emoji = h.accuracy >= 70 ? "✅" : h.accuracy >= 40 ? "🟡" : "❌";
+        msg += `${emoji} ${escMd(name)} — *${escMd(acc)}%*\n`;
       }
 
-      const trend = history.length >= 2
-        ? (history[0]!.accuracy >= history[1]!.accuracy ? "📈 Improving!" : "📉 Keep practicing!")
-        : "Just started!";
-
-      card += "╠══════════════════════════════╣\n";
-      card += `║ ${trend.padEnd(29)}║\n`;
-      card += "╚══════════════════════════════╝\n";
-      card += "```";
-
-      await ctx.reply(`*Your Performance Card*\n\n${escMd(card).replace(/```/g, "```")}`.replace(/\\```/g, "```"), { parse_mode: "MarkdownV2" });
-
+      await ctx.reply(msg, { parse_mode: "MarkdownV2" });
     } catch (err) {
       logger.error({ err }, "stats command error");
       await ctx.reply("❌ Error loading stats\\. Please try again\\.", { parse_mode: "MarkdownV2" });

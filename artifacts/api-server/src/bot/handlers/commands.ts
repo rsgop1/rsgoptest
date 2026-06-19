@@ -10,10 +10,11 @@ import {
 } from "@workspace/db";
 import { eq, and, gte, lte } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
-import { updateSession } from "../session.js";
+import { getSession, updateSession, clearQuiz } from "../session.js";
 import { paymentKeyboard, premiumKeyboard } from "../keyboards.js";
-import { sendNextQuestion } from "./quiz.js";
+import { sendNextQuestion, startQuizForUser } from "./quiz.js";
 import { logger } from "../../lib/logger.js";
+import { emitTelemetry } from "../../lib/telemetry.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -35,6 +36,21 @@ async function getActiveSale(testId: string) {
 }
 
 export function registerCommandHandlers(bot: Bot): void {
+  bot.command("stop", async (ctx) => {
+    const userId = ctx.from!.id;
+    const session = getSession(userId);
+    if (!session.quiz) {
+      await ctx.reply("❌ No active test to stop\\. Use /test\\_series to start one\\.", { parse_mode: "MarkdownV2" });
+      return;
+    }
+    clearQuiz(userId);
+    emitTelemetry(`User ${userId} stopped test manually`);
+    await ctx.reply(
+      "🛑 *Test stopped\\.* Your progress has been discarded\\.\n\nUse /test\\_series to start a new test or /stats to see your history\\.",
+      { parse_mode: "MarkdownV2" }
+    );
+  });
+
   bot.command("test_series", async (ctx) => {
     try {
       const userId = ctx.from!.id;
@@ -106,7 +122,7 @@ export function registerCommandHandlers(bot: Bot): void {
 
   bot.command("premium", async (ctx) => {
     await ctx.reply(
-      `💎 *Series TestPro Premium*\n\n*What you get:*\n✅ All mock tests unlocked\n✅ AI Doubt Solver\n✅ Detailed solutions for every question\n✅ Global rank & performance analytics\n✅ Wrong question notebook\n✅ Flash sale early access\n\n💰 *Plan:* 30 Days Premium\n💲 ₹199 \\| ⭐ 500 Telegram Stars\n\nChoose your payment method:`,
+      `💎 *Series TestPro Premium*\n\n*What you get:*\n✅ All mock tests unlocked\n✅ AI Doubt Solver\n✅ Detailed solutions for every question\n✅ Global rank & performance analytics\n✅ Wrong question notebook\n✅ Flash sale early access\n✅ No ads before tests\n\n💰 *Plan:* 30 Days Premium\n💲 ₹199 \\| ⭐ 500 Telegram Stars\n\nChoose your payment method:`,
       { parse_mode: "MarkdownV2", reply_markup: premiumKeyboard() }
     );
   });
@@ -142,11 +158,11 @@ export function registerCommandHandlers(bot: Bot): void {
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "deepseek/deepseek-v4-flash:free",
+          model: "deepseek/deepseek-r1-0528-qwen3-8b:free",
           messages: [
             {
               role: "system",
-              content: "You are a helpful educational AI for Indian competitive exam students (SSC, Railway, Banking, UPSC, State GovtJobs). Answer doubts clearly and concisely in English. Keep responses under 250 words. Use simple formatting without markdown symbols."
+              content: "You are a helpful educational AI for Indian competitive exam students (SSC, Railway, Banking, UPSC, State Govt Jobs). Answer doubts clearly and concisely in English. Keep responses under 250 words. Use simple formatting without markdown symbols."
             },
             { role: "user", content: text }
           ],
@@ -159,16 +175,14 @@ export function registerCommandHandlers(bot: Bot): void {
         error?: { message: string };
       };
 
-      if (data.error) {
-        throw new Error(data.error.message);
-      }
+      if (data.error) throw new Error(data.error.message);
 
       const answer = data.choices?.[0]?.message?.content ?? "Could not get an answer. Please try again.";
 
       await ctx.api.editMessageText(
         ctx.chat.id,
         thinkMsg.message_id,
-        `🤖 *AI Doubt Solver*\n\n*Question:* ${escMd(text.slice(0, 100))}\n\n*Answer:*\n${escMd(answer)}`,
+        `🤖 *AI Doubt Solver*\n\n*Q:* ${escMd(text.slice(0, 100))}\n\n*Answer:*\n${escMd(answer)}`,
         { parse_mode: "MarkdownV2" }
       );
     } catch (err) {
@@ -223,6 +237,8 @@ export function registerCommandHandlers(bot: Bot): void {
           correctCount: 0,
           wrongCount: 0,
           skippedCount: 0,
+          userAnswers: questions.map(() => null),
+          pollMessageIds: [],
           wrongQuestionIds: [],
           cheatWarnings: 0,
           timerSeconds: 30,
@@ -231,7 +247,7 @@ export function registerCommandHandlers(bot: Bot): void {
       });
 
       await ctx.reply(
-        `📓 *Wrong Question Notebook*\n\n*${wrongQ.length}* questions to practice\\!\n⏱️ 30 seconds per question\n\nLet's improve your weak spots 💪`,
+        `📓 *Wrong Question Notebook*\n\n*${wrongQ.length}* questions to practice\\!\n⏱️ 30 seconds per question\n\nLet's improve your weak spots 💪\n_Type /stop anytime to end_`,
         { parse_mode: "MarkdownV2" }
       );
       await sendNextQuestion(userId);

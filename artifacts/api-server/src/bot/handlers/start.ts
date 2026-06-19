@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
+import { InlineKeyboard } from "grammy";
 import { db } from "@workspace/db";
-import { usersTable } from "@workspace/db";
+import { usersTable, testSeriesTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import {
   mainCategoryKeyboard,
@@ -8,10 +9,13 @@ import {
   railwaySubKeyboard,
   bankingSubKeyboard,
   biharSubKeyboard,
+  testDetailKeyboard,
 } from "../keyboards.js";
 import { getSession, updateSession } from "../session.js";
 import { handleChallengeStart } from "./challenge.js";
+import { getConfig } from "./helpers.js";
 import { logger } from "../../lib/logger.js";
+import { emitTelemetry } from "../../lib/telemetry.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -61,10 +65,29 @@ async function upsertUser(
         .where(eq(usersTable.userId, referredBy))
         .catch(() => {});
     }
+    emitTelemetry(`New user joined: ${firstName} (ID: ${userId})`);
     return true;
   } else {
     await db.update(usersTable).set({ username: username ?? null }).where(eq(usersTable.userId, userId));
     return false;
+  }
+}
+
+async function checkForceSub(userId: number): Promise<{ allowed: boolean; channel: string }> {
+  try {
+    const forceSub = await getConfig("force_sub_enabled");
+    if (forceSub !== "true") return { allowed: true, channel: "" };
+    const channel = await getConfig("force_sub_channel");
+    if (!channel) return { allowed: true, channel: "" };
+
+    const { getApi } = await import("../api-instance.js");
+    const api = getApi();
+    const channelId: string | number = channel.startsWith("@") ? channel : (isNaN(Number(channel)) ? channel : Number(channel));
+    const member = await api.getChatMember(channelId as string, userId);
+    const allowed = member.status !== "left" && member.status !== "kicked" && member.status !== "restricted";
+    return { allowed, channel };
+  } catch {
+    return { allowed: true, channel: "" };
   }
 }
 
@@ -81,6 +104,41 @@ export function registerStartHandlers(bot: Bot): void {
         return;
       }
 
+      if (param.startsWith("test_")) {
+        const testId = param.replace("test_", "");
+        await upsertUser(from.id, from.first_name, from.last_name, from.username);
+
+        const { allowed, channel } = await checkForceSub(from.id);
+        if (!allowed) {
+          const joinKb = new InlineKeyboard().url("👉 Join Channel", `https://t.me/${channel.replace("@", "")}`);
+          await ctx.reply(
+            `🔒 *Channel Membership Required*\n\nJoin our channel first:\n${escMd(channel)}\n\nAfter joining, send /start to continue\\.`,
+            { parse_mode: "MarkdownV2", reply_markup: joinKb }
+          );
+          return;
+        }
+
+        const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
+        if (!test) {
+          await ctx.reply("❌ Test not found. Use /test_series to browse available tests.");
+          return;
+        }
+
+        const qCount = Array.isArray(test.questionsData) ? test.questionsData.length : 0;
+        const freeOrPaid = test.priceInr === 0 ? "✅ Free" : `💰 ₹${test.priceInr}`;
+        await ctx.reply(
+          `📋 *${escMd(test.testName.trim())}*\n\n` +
+          `📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n` +
+          `📝 Questions: *${qCount}*\n` +
+          `⏱️ Timer: *${test.timerSeconds ?? 30}s* per question\n` +
+          `➕ Correct: *\\+${escMd(String(test.positiveMarking))}*   ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n` +
+          `💵 ${freeOrPaid}\n\n` +
+          `Tap *Start Test Now* to begin\\!`,
+          { parse_mode: "MarkdownV2", reply_markup: testDetailKeyboard(test.testId) }
+        );
+        return;
+      }
+
       let referredBy: number | undefined;
       if (param.startsWith("ref_")) {
         const refId = parseInt(param.replace("ref_", ""), 10);
@@ -92,6 +150,16 @@ export function registerStartHandlers(bot: Bot): void {
       const isNew = await upsertUser(from.id, from.first_name, from.last_name, from.username, referredBy);
       const botUsername = ctx.me.username ?? "gt_testprobot";
       const refLink = `https://t.me/${botUsername}?start=ref_${from.id}`;
+
+      const { allowed, channel } = await checkForceSub(from.id);
+      if (!allowed) {
+        const joinKb = new InlineKeyboard().url("👉 Join Channel", `https://t.me/${channel.replace("@", "")}`);
+        await ctx.reply(
+          `🔒 *Channel Membership Required*\n\nJoin our channel to use Series TestPro:\n${escMd(channel)}\n\nAfter joining, come back and send /start\\.`,
+          { parse_mode: "MarkdownV2", reply_markup: joinKb }
+        );
+        return;
+      }
 
       if (isNew) {
         updateSession(from.id, { onboardingStep: "idle" });
@@ -128,14 +196,26 @@ export function registerStartHandlers(bot: Bot): void {
     );
   });
 
+  bot.callbackQuery("cat_back_main", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(WELCOME_MSG, { parse_mode: "MarkdownV2", reply_markup: mainCategoryKeyboard() });
+  });
+
   bot.callbackQuery(/^cat_sub_/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = ctx.from.id;
-    const sub = ctx.callbackQuery.data.replace("cat_sub_", "").replace(/_/g, " ");
-    const session = getSession(userId);
-    const main = session.pendingCategory ?? "SSC";
+    const raw = ctx.callbackQuery.data.replace("cat_sub_", "");
+    const parts = raw.split("_");
+    const main = parts[0] ?? "SSC";
+    const sub = parts.slice(1).join(" ");
 
-    await db.update(usersTable).set({ targetExamMain: main, targetExamSub: sub }).where(eq(usersTable.userId, userId));
+    const mainFull =
+      main === "SSC" ? "SSC Exams" :
+      main === "Railway" ? "Railway Exams" :
+      main === "Banking" ? "Banking Exams" :
+      main === "Bihar" ? "Bihar Govt Exams" : main;
+
+    await db.update(usersTable).set({ targetExamMain: mainFull, targetExamSub: sub }).where(eq(usersTable.userId, userId));
     updateSession(userId, { onboardingStep: "idle", pendingCategory: undefined });
 
     const botUsername = ctx.me.username ?? "gt_testprobot";
