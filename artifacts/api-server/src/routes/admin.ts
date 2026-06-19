@@ -9,8 +9,11 @@ import {
   flashSalesTable,
   userHistoryTable,
   adsTable,
+  reportsTable,
+  liveTestsTable,
+  achievementsTable,
 } from "@workspace/db";
-import { eq, and, count, gte, sql, desc, gt } from "drizzle-orm";
+import { eq, and, count, gte, sql, desc, gt, lt } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
 import { getApi } from "../bot/api-instance.js";
 import { setConfig, getConfig } from "../bot/handlers/helpers.js";
@@ -604,6 +607,8 @@ router.get("/settings", requireAuth, async (_req: Request, res: Response) => {
       force_sub_enabled: cfg["force_sub_enabled"] ?? "false",
       force_sub_channel: cfg["force_sub_channel"] ?? "",
       leaderboard_channel: cfg["leaderboard_channel"] ?? "",
+      bot_groups: cfg["bot_groups"] ?? "[]",
+      anon_doubt_group: cfg["anon_doubt_group"] ?? "",
     });
   } catch (err) {
     logger.error({ err }, "Admin settings error");
@@ -678,6 +683,175 @@ router.get("/users", requireAuth, async (_req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "Admin list users error");
     res.status(500).json({ error: "Failed to load users" });
+  }
+});
+
+// ── REPORTS ─────────────────────────────────────────────────────────────────
+router.get("/reports", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const status = (req.query["status"] as string) ?? "open";
+    const rows = await db.select().from(reportsTable)
+      .where(status === "all" ? undefined : eq(reportsTable.status, status))
+      .orderBy(desc(reportsTable.createdAt))
+      .limit(100);
+    res.json(rows.map((r) => ({
+      ...r,
+      createdAt: r.createdAt.toISOString(),
+      resolvedAt: r.resolvedAt ? r.resolvedAt.toISOString() : null,
+    })));
+  } catch (err) {
+    logger.error({ err }, "Admin reports error");
+    res.status(500).json({ error: "Failed to load reports" });
+  }
+});
+
+router.patch("/reports/:id/resolve", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    const { adminNote } = req.body as { adminNote?: string };
+    await db.update(reportsTable).set({
+      status: "resolved",
+      adminNote: adminNote ?? null,
+      resolvedAt: new Date(),
+    }).where(eq(reportsTable.id, id));
+
+    const [report] = await db.select().from(reportsTable).where(eq(reportsTable.id, id)).limit(1);
+    if (report) {
+      try {
+        const api = getApi();
+        await api.sendMessage(
+          report.userId,
+          `✅ *Your report has been reviewed\\!*\n\nQ${report.questionIndex + 1}: _"${report.questionText.slice(0, 80)}…"_\n\n${adminNote ? `*Admin Note:* ${adminNote}` : "The issue has been noted and will be corrected\\."}\n\nThank you for helping improve Series TestPro\\! 🙏`,
+          { parse_mode: "MarkdownV2" }
+        );
+      } catch { }
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to resolve report" });
+  }
+});
+
+router.delete("/reports/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    await db.delete(reportsTable).where(eq(reportsTable.id, Number(req.params["id"])));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete report" });
+  }
+});
+
+// ── LIVE TESTS ───────────────────────────────────────────────────────────────
+router.get("/live-tests", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const rows = await db.select().from(liveTestsTable).orderBy(desc(liveTestsTable.scheduledAt)).limit(50);
+    res.json(rows.map((r) => ({
+      ...r,
+      scheduledAt: r.scheduledAt.toISOString(),
+      createdAt: r.createdAt.toISOString(),
+      participantCount: Array.isArray(r.participants) ? r.participants.length : 0,
+    })));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load live tests" });
+  }
+});
+
+router.post("/live-tests", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { testId, title, scheduledAt, groupChatId } = req.body as {
+      testId: string; title: string; scheduledAt: string; groupChatId?: string;
+    };
+    if (!testId || !title || !scheduledAt) {
+      res.status(400).json({ error: "testId, title, scheduledAt required" });
+      return;
+    }
+    const [inserted] = await db.insert(liveTestsTable).values({
+      testId,
+      title,
+      scheduledAt: new Date(scheduledAt),
+      groupChatId: groupChatId ? Number(groupChatId) : null,
+      status: "scheduled",
+    }).returning();
+
+    emitTelemetry(`Live test scheduled: "${title}" at ${scheduledAt}`);
+    res.status(201).json({
+      ...inserted,
+      scheduledAt: inserted!.scheduledAt.toISOString(),
+      createdAt: inserted!.createdAt.toISOString(),
+    });
+  } catch (err) {
+    logger.error({ err }, "Error creating live test");
+    res.status(500).json({ error: "Failed to create live test" });
+  }
+});
+
+router.delete("/live-tests/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, Number(req.params["id"])));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to cancel live test" });
+  }
+});
+
+// ── EXPORT CSV ───────────────────────────────────────────────────────────────
+router.get("/export/users", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const users = await db.select().from(usersTable).orderBy(usersTable.joinedAt);
+    const header = "id,userId,fullName,username,tier,targetExamMain,targetExamSub,totalTestsTaken,referralCount,joinedAt\n";
+    const rows = users.map((u) =>
+      [u.id, u.userId, `"${u.fullName.replace(/"/g, '""')}"`, u.username ?? "", u.tier,
+       u.targetExamMain ?? "", u.targetExamSub ?? "", u.totalTestsTaken, u.referralCount,
+       u.joinedAt.toISOString()].join(",")
+    ).join("\n");
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=users.csv");
+    res.send(header + rows);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to export users" });
+  }
+});
+
+router.get("/export/payments", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const payments = await db.select().from(paymentsTable).orderBy(desc(paymentsTable.submittedAt));
+    const header = "id,paymentId,userId,method,amount,testId,status,submittedAt\n";
+    const rows = payments.map((p) =>
+      [p.id, p.paymentId, p.userId, p.method, p.amount, p.testId ?? "", p.status,
+       p.submittedAt.toISOString()].join(",")
+    ).join("\n");
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=payments.csv");
+    res.send(header + rows);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to export payments" });
+  }
+});
+
+router.get("/export/analytics", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const history = await db.select().from(userHistoryTable).orderBy(desc(userHistoryTable.completedAt)).limit(5000);
+    const header = "id,userId,testId,score,maxScore,correctCount,wrongCount,skippedCount,accuracy,completedAt\n";
+    const rows = history.map((h) =>
+      [h.id, h.userId, h.testId, h.score, h.maxScore, h.correctCount, h.wrongCount,
+       h.skippedCount, h.accuracy.toFixed(2), h.completedAt.toISOString()].join(",")
+    ).join("\n");
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=analytics.csv");
+    res.send(header + rows);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to export analytics" });
+  }
+});
+
+// ── ACHIEVEMENTS ─────────────────────────────────────────────────────────────
+router.get("/achievements", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const rows = await db.select().from(achievementsTable).orderBy(desc(achievementsTable.awardedAt)).limit(200);
+    res.json(rows.map((r) => ({ ...r, awardedAt: r.awardedAt.toISOString() })));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load achievements" });
   }
 });
 

@@ -15,6 +15,8 @@ export const usersTable = pgTable("users", {
   totalTestsTaken: integer("total_tests_taken").notNull().default(0),
   referredBy: bigint("referred_by", { mode: "number" }),
   referralCount: integer("referral_count").notNull().default(0),
+  anonDoubtsUsed: integer("anon_doubts_used").notNull().default(0),
+  anonDoubtDate: text("anon_doubt_date"),
   joinedAt: timestamp("joined_at").notNull().defaultNow(),
 });
 

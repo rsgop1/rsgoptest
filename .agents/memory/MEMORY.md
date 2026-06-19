@@ -1,3 +1,6 @@
 - [Grammy sendPoll quiz field](grammy-sendpoll.md) — `correct_option_ids: [number]` (array), NOT `correct_option_id`; TypeScript enforces this
 - [Category callbacks](category-callbacks.md) — keyboard uses `cat_main_SSC`, `cat_sub_SSC_CGL`, `cat_back_main`; handlers use same patterns in start.ts
 - [Ad gateway flow](ad-gateway.md) — free users see 15s ad before test; premium users skip; `ad_noop` callback dismisses early tap; timer expiry shows skip button
+- [Grammy promoteChatMember quirks](grammy-promote-member.md) — `can_be_edited` param does NOT exist in Grammy's type for promoteChatMember; omit it.
+- [Payments table column name](payments-table.md) — payments table uses `submittedAt` not `createdAt`; use submittedAt for ordering/export.
+- [Quiz session shape](quiz-session.md) — QuizSession requires `consecutiveCorrect: number`; always include it when constructing a new quiz session object.

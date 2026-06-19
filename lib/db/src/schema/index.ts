@@ -8,3 +8,7 @@ export * from "./purchased-tests";
 export * from "./flash-sales";
 export * from "./challenges";
 export * from "./ads";
+export * from "./achievements";
+export * from "./reports";
+export * from "./live-tests";
+export * from "./anon-doubts";

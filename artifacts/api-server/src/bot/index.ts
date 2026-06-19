@@ -7,6 +7,9 @@ import { registerPaymentHandlers } from "./handlers/payment.js";
 import { registerLeaderboardHandlers, updateChannelLeaderboard } from "./handlers/leaderboard.js";
 import { registerStatsHandlers } from "./handlers/stats.js";
 import { registerChallengeHandlers, setBotUsername } from "./handlers/challenge.js";
+import { registerAchievementHandlers } from "./handlers/achievements.js";
+import { registerAnonDoubtHandlers } from "./handlers/anon-doubt.js";
+import { registerLiveTestHandlers, startLiveTestScheduler } from "./handlers/live-test.js";
 import { logger } from "../lib/logger.js";
 import { emitTelemetry } from "../lib/telemetry.js";
 
@@ -25,6 +28,9 @@ registerPaymentHandlers(bot);
 registerLeaderboardHandlers(bot);
 registerStatsHandlers(bot);
 registerChallengeHandlers(bot);
+registerAchievementHandlers(bot);
+registerAnonDoubtHandlers(bot);
+registerLiveTestHandlers(bot);
 
 bot.callbackQuery("ad_noop", async (ctx) => {
   await ctx.answerCallbackQuery({ text: "⏳ Please wait for the timer...", show_alert: false });
@@ -44,7 +50,10 @@ export function startBot(): void {
       setInterval(async () => {
         await updateChannelLeaderboard();
       }, 5 * 60 * 1000);
+
+      startLiveTestScheduler();
     },
+    allowed_updates: ["message", "callback_query", "poll_answer", "chat_member", "pre_checkout_query"],
   }).catch((err) => {
     logger.error({ err }, "Bot crashed");
   });

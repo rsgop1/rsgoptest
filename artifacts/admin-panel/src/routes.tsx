@@ -10,6 +10,8 @@ import Settings from "./pages/settings";
 import Users from "./pages/users";
 import Ads from "./pages/ads";
 import Telemetry from "./pages/telemetry";
+import Reports from "./pages/reports";
+import LiveTests from "./pages/live-tests";
 
 function AppRoutes() {
   return (
@@ -35,6 +37,12 @@ function AppRoutes() {
       </Route>
       <Route path="/ads">
         <Layout><Ads /></Layout>
+      </Route>
+      <Route path="/reports">
+        <Layout><Reports /></Layout>
+      </Route>
+      <Route path="/live-tests">
+        <Layout><LiveTests /></Layout>
       </Route>
       <Route path="/users">
         <Layout><Users /></Layout>

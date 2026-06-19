@@ -15,7 +15,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Save, Send, Megaphone, Settings as SettingsIcon } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Save, Send, Megaphone, Settings as SettingsIcon, Users, Download, Plus, Trash2 } from "lucide-react";
+
+interface BotGroup {
+  id: string;
+  name: string;
+}
 
 export default function Settings() {
   const { data: settings, isLoading } = useAdminGetSettings();
@@ -25,19 +31,32 @@ export default function Settings() {
   const [formData, setFormData] = useState({
     admin_upi_vpa: "",
     force_sub_enabled: "false",
-    force_sub_channel: ""
+    force_sub_channel: "",
+    leaderboard_channel: "",
+    anon_doubt_group: "",
+    bot_groups: "[]",
   });
 
   const [broadcastMsg, setBroadcastMsg] = useState("");
   const [broadcastTarget, setBroadcastTarget] = useState("all");
+  const [botGroups, setBotGroups] = useState<BotGroup[]>([]);
+  const [newGroupId, setNewGroupId] = useState("");
+  const [newGroupName, setNewGroupName] = useState("");
 
   useEffect(() => {
     if (settings) {
+      const s = settings as any;
       setFormData({
-        admin_upi_vpa: settings.admin_upi_vpa || "",
-        force_sub_enabled: settings.force_sub_enabled || "false",
-        force_sub_channel: settings.force_sub_channel || ""
+        admin_upi_vpa: s.admin_upi_vpa || "",
+        force_sub_enabled: s.force_sub_enabled || "false",
+        force_sub_channel: s.force_sub_channel || "",
+        leaderboard_channel: s.leaderboard_channel || "",
+        anon_doubt_group: s.anon_doubt_group || "",
+        bot_groups: s.bot_groups || "[]",
       });
+      try {
+        setBotGroups(JSON.parse(s.bot_groups || "[]"));
+      } catch { setBotGroups([]); }
     }
   }, [settings]);
 
@@ -64,7 +83,11 @@ export default function Settings() {
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
-    updateMutation.mutate({ data: formData });
+    const saveData = {
+      ...formData,
+      bot_groups: JSON.stringify(botGroups),
+    };
+    updateMutation.mutate({ data: saveData });
   };
 
   const handleBroadcast = (e: React.FormEvent) => {
@@ -73,6 +96,22 @@ export default function Settings() {
     if (confirm(`Send this broadcast to ${broadcastTarget}?`)) {
       broadcastMutation.mutate({ data: { message: broadcastMsg, target: broadcastTarget } });
     }
+  };
+
+  const addGroup = () => {
+    if (!newGroupId.trim()) return;
+    const group: BotGroup = { id: newGroupId.trim(), name: newGroupName.trim() || newGroupId.trim() };
+    setBotGroups((g) => [...g, group]);
+    setNewGroupId("");
+    setNewGroupName("");
+  };
+
+  const removeGroup = (id: string) => {
+    setBotGroups((g) => g.filter((x) => x.id !== id));
+  };
+
+  const handleExport = (type: "users" | "payments" | "analytics") => {
+    window.open(`/api/admin/export/${type}`, "_blank");
   };
 
   if (isLoading) {
@@ -88,28 +127,48 @@ export default function Settings() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Platform Settings</h1>
-        <p className="text-muted-foreground mt-1">Configure bot behavior, payments, and send broadcasts.</p>
+        <p className="text-muted-foreground mt-1">Configure bot behavior, payments, groups, and exports.</p>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
+        {/* Global Config */}
         <Card className="shadow-sm">
           <CardHeader>
             <div className="flex items-center gap-2">
               <SettingsIcon className="h-5 w-5 text-primary" />
               <CardTitle>Global Configuration</CardTitle>
             </div>
-            <CardDescription>Payment and access settings</CardDescription>
+            <CardDescription>Payment, force-sub, and channel settings</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSaveSettings} className="space-y-6">
+            <form onSubmit={handleSaveSettings} className="space-y-5">
               <div className="space-y-2">
                 <Label>Admin UPI ID (VPA)</Label>
                 <Input 
                   value={formData.admin_upi_vpa} 
                   onChange={e => setFormData({...formData, admin_upi_vpa: e.target.value})}
-                  placeholder="name@upi"
+                  placeholder="8102289714@ptyes"
                 />
-                <p className="text-xs text-muted-foreground">Used for manual payment approvals.</p>
+                <p className="text-xs text-muted-foreground">Used for manual UPI payments by users.</p>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Leaderboard Channel ID/Username</Label>
+                <Input
+                  value={formData.leaderboard_channel}
+                  onChange={e => setFormData({...formData, leaderboard_channel: e.target.value})}
+                  placeholder="@testbook_leaderboard or -1001234567"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Anonymous Doubts Group ID</Label>
+                <Input
+                  value={formData.anon_doubt_group}
+                  onChange={e => setFormData({...formData, anon_doubt_group: e.target.value})}
+                  placeholder="-1001234567890"
+                />
+                <p className="text-xs text-muted-foreground">Group where /anon doubts are posted anonymously.</p>
               </div>
 
               <div className="space-y-4 p-4 border rounded-lg bg-muted/20">
@@ -130,8 +189,11 @@ export default function Settings() {
                     <Input 
                       value={formData.force_sub_channel} 
                       onChange={e => setFormData({...formData, force_sub_channel: e.target.value})}
-                      placeholder="@testbook_plus"
+                      placeholder="@testbook_plus or -1001234567890"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Bot must be admin of this channel with "Read Messages" permission.
+                    </p>
                   </div>
                 )}
               </div>
@@ -144,6 +206,7 @@ export default function Settings() {
           </CardContent>
         </Card>
 
+        {/* Broadcast */}
         <Card className="shadow-sm border-t-4 border-t-primary">
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -153,7 +216,7 @@ export default function Settings() {
             <CardDescription>Send mass messages to bot users</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleBroadcast} className="space-y-6">
+            <form onSubmit={handleBroadcast} className="space-y-5">
               <div className="space-y-2">
                 <Label>Target Audience</Label>
                 <Select value={broadcastTarget} onValueChange={setBroadcastTarget}>
@@ -173,8 +236,8 @@ export default function Settings() {
                 <Textarea 
                   value={broadcastMsg} 
                   onChange={e => setBroadcastMsg(e.target.value)}
-                  placeholder="Enter broadcast message here... Telegram markdown is supported."
-                  className="min-h-[150px] resize-none"
+                  placeholder="Enter broadcast message here... Plain text (no MarkdownV2 needed)."
+                  className="min-h-[120px] resize-none"
                 />
               </div>
 
@@ -190,6 +253,137 @@ export default function Settings() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Bot Groups for Achievement Titles */}
+      <Card className="shadow-sm">
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Users className="h-5 w-5 text-primary" />
+            <CardTitle>Achievement Title Groups</CardTitle>
+          </div>
+          <CardDescription>
+            Bot will set custom Telegram titles for users with achievements in these groups.
+            Bot must be admin with "Add New Admins" permission in each group.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {botGroups.length > 0 && (
+            <div className="space-y-2">
+              {botGroups.map((g) => (
+                <div key={g.id} className="flex items-center justify-between p-3 border rounded-lg bg-muted/30">
+                  <div>
+                    <p className="font-medium text-sm">{g.name}</p>
+                    <p className="text-xs text-muted-foreground font-mono">{g.id}</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => removeGroup(g.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <div className="flex-1 space-y-2">
+              <Input
+                placeholder="Group ID (e.g. -1001234567890)"
+                value={newGroupId}
+                onChange={e => setNewGroupId(e.target.value)}
+              />
+            </div>
+            <div className="flex-1 space-y-2">
+              <Input
+                placeholder="Group Name (optional)"
+                value={newGroupName}
+                onChange={e => setNewGroupName(e.target.value)}
+              />
+            </div>
+            <Button type="button" onClick={addGroup} disabled={!newGroupId.trim()}>
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="text-xs text-muted-foreground space-y-1 bg-muted/30 rounded-lg p-3">
+            <p className="font-medium">Achievement titles awarded:</p>
+            <p>🎯 Accuracy God • ⚡ The Flash • 🧠 Iron Brain • 👑 Comeback King • 🦉 Night Owl • 🏃 Marathon Runner</p>
+          </div>
+
+          <Button
+            onClick={() => {
+              const saveData = { ...formData, bot_groups: JSON.stringify(botGroups) };
+              updateMutation.mutate({ data: saveData });
+            }}
+            disabled={updateMutation.isPending}
+          >
+            <Save className="h-4 w-4 mr-2" />
+            Save Groups
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Export Data */}
+      <Card className="shadow-sm">
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Download className="h-5 w-5 text-primary" />
+            <CardTitle>Export Data</CardTitle>
+          </div>
+          <CardDescription>Download CSV files for analysis and backup</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-4 border rounded-lg space-y-3">
+              <div>
+                <p className="font-medium text-sm">Users Export</p>
+                <p className="text-xs text-muted-foreground">All registered users with stats</p>
+              </div>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => handleExport("users")}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download users.csv
+              </Button>
+            </div>
+
+            <div className="p-4 border rounded-lg space-y-3">
+              <div>
+                <p className="font-medium text-sm">Payments Export</p>
+                <p className="text-xs text-muted-foreground">All payment transactions</p>
+              </div>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => handleExport("payments")}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download payments.csv
+              </Button>
+            </div>
+
+            <div className="p-4 border rounded-lg space-y-3">
+              <div>
+                <p className="font-medium text-sm">Analytics Export</p>
+                <p className="text-xs text-muted-foreground">All test attempt history</p>
+              </div>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => handleExport("analytics")}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download analytics.csv
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

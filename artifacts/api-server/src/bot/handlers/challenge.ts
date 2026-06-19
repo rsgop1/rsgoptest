@@ -172,6 +172,7 @@ export async function handleChallengeStart(bot: Bot, userId: number, challengeId
         userAnswers: questions.map(() => null),
         pollMessageIds: [],
         timerSeconds: 30,
+        consecutiveCorrect: 0,
       },
       solution: undefined,
     });

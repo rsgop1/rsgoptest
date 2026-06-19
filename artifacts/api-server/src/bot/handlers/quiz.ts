@@ -6,8 +6,9 @@ import {
   wrongQuestionsTable,
   usersTable,
   adsTable,
+  reportsTable,
 } from "@workspace/db";
-import { eq, and, count, gt, desc } from "drizzle-orm";
+import { eq, and, count, gt, desc, sql } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
 import {
   getSession,
@@ -21,6 +22,7 @@ import { logger } from "../../lib/logger.js";
 import { getConfig } from "./helpers.js";
 import { postChallengeResult } from "./challenge.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
+import { checkAndAwardAchievements } from "./achievements.js";
 import { InlineKeyboard } from "grammy";
 
 function escMd(text: string): string {
@@ -57,6 +59,75 @@ function buildScorecardCard(
   );
 }
 
+function buildFullRecap(questions: QuestionData[], userAnswers: (number | null)[]): string[] {
+  const lines: string[] = [];
+  lines.push("📋 *Full Test Recap*\n");
+
+  const grid: string[] = [];
+  for (let i = 0; i < questions.length; i++) {
+    const ans = userAnswers[i];
+    const correct = questions[i]!.correctOptionIndex;
+    if (ans === null || ans === undefined) grid.push("⏭️");
+    else if (ans === correct) grid.push("✅");
+    else grid.push("❌");
+  }
+
+  const gridRows: string[] = [];
+  for (let i = 0; i < grid.length; i += 10) {
+    const chunk = grid.slice(i, i + 10);
+    gridRows.push(`Q${i + 1}–${i + chunk.length}: ${chunk.join(" ")}`);
+  }
+  lines.push(gridRows.join("\n"));
+
+  const wrongLines: string[] = [];
+  for (let i = 0; i < questions.length; i++) {
+    const ans = userAnswers[i];
+    const q = questions[i]!;
+    const correct = q.correctOptionIndex;
+    if (ans !== null && ans !== undefined && ans !== correct) {
+      const userOptText = q.options[ans] ?? "?";
+      const correctOptText = q.options[correct] ?? "?";
+      wrongLines.push(`❌ *Q${i + 1}:* ${escMd(q.question.slice(0, 60))}…\n   Your: _${escMd(userOptText.slice(0, 40))}_\n   Correct: _${escMd(correctOptText.slice(0, 40))}_`);
+    }
+  }
+
+  const skippedLines: string[] = [];
+  for (let i = 0; i < questions.length; i++) {
+    const ans = userAnswers[i];
+    if (ans === null || ans === undefined) {
+      skippedLines.push(`⏭️ Q${i + 1}: ${escMd(questions[i]!.question.slice(0, 60))}…`);
+    }
+  }
+
+  const messages: string[] = [];
+  const header = lines.join("\n");
+
+  let wrongSection = "";
+  if (wrongLines.length > 0) {
+    wrongSection = `\n\n❌ *Wrong Answers \\(${wrongLines.length}\\):*\n\n` + wrongLines.slice(0, 15).join("\n\n");
+  }
+  if (wrongLines.length > 15) {
+    wrongSection += `\n\n_\\.\\.\\. and ${wrongLines.length - 15} more — use Solution Book to review all_`;
+  }
+
+  let skippedSection = "";
+  if (skippedLines.length > 0) {
+    skippedSection = `\n\n⏭️ *Skipped \\(${skippedLines.length}\\):*\n` + skippedLines.slice(0, 10).join("\n");
+  }
+
+  const full = header + wrongSection + skippedSection;
+  if (full.length < 3800) {
+    messages.push(full);
+  } else {
+    messages.push(header + (wrongLines.length > 0 ? `\n\n❌ Wrong: *${wrongLines.length}*` : "") + (skippedLines.length > 0 ? `\n⏭️ Skipped: *${skippedLines.length}*` : ""));
+    if (wrongSection.length > 0) {
+      messages.push(`❌ *Wrong Answers:*\n\n` + wrongLines.slice(0, 15).join("\n\n"));
+    }
+  }
+
+  return messages;
+}
+
 async function checkForceSub(userId: number): Promise<boolean> {
   try {
     const forceSub = await getConfig("force_sub_enabled");
@@ -64,20 +135,27 @@ async function checkForceSub(userId: number): Promise<boolean> {
     const channel = await getConfig("force_sub_channel");
     if (!channel) return true;
     const api = getApi();
-    const channelId = channel.startsWith("@") ? channel : (isNaN(Number(channel)) ? channel : Number(channel));
+    let channelId: string | number = channel.trim();
+    if (!channelId.startsWith("@")) {
+      const num = Number(channelId);
+      channelId = isNaN(num) ? channelId : num;
+    }
     const member = await api.getChatMember(channelId as string, userId);
-    return member.status !== "left" && member.status !== "kicked" && member.status !== "restricted";
-  } catch {
-    return true;
+    const allowed = member.status === "member" || member.status === "creator" || member.status === "administrator";
+    return allowed;
+  } catch (err) {
+    logger.warn({ err }, "checkForceSub error — defaulting to block");
+    return false;
   }
 }
 
 async function deletePollMessages(userId: number, messageIds: number[]): Promise<void> {
   const api = getApi();
-  for (const msgId of messageIds) {
+  const toDelete = messageIds.slice(-50);
+  for (const msgId of toDelete) {
     try {
       await api.deleteMessage(userId, msgId);
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 100));
     } catch { }
   }
 }
@@ -85,7 +163,8 @@ async function deletePollMessages(userId: number, messageIds: number[]): Promise
 export async function startQuizForUser(
   userId: number,
   test: { testId: string; testName: string; questionsData: unknown; timerSeconds: number | null; positiveMarking: number; negativeMarking: number },
-  sendStartMsg = true
+  sendStartMsg = true,
+  customTimer?: number
 ): Promise<void> {
   const api = getApi();
   const questions = test.questionsData as QuestionData[];
@@ -97,13 +176,19 @@ export async function startQuizForUser(
   const inSub = await checkForceSub(userId);
   if (!inSub) {
     const channel = await getConfig("force_sub_channel");
-    const joinKb = new InlineKeyboard().url("👉 Join Channel", `https://t.me/${(channel ?? "").replace("@", "")}`);
+    const channelDisplay = channel ?? "";
+    const joinUrl = channelDisplay.startsWith("@")
+      ? `https://t.me/${channelDisplay.replace("@", "")}`
+      : `https://t.me/c/${channelDisplay.replace("-100", "")}`;
+    const joinKb = new InlineKeyboard().url("👉 Join Channel", joinUrl);
     await api.sendMessage(userId,
-      `🔒 *Channel Membership Required*\n\nJoin our channel to access tests and continue:\n${channel ?? ""}\n\nAfter joining, send /start to continue\\.`,
+      `🔒 *Channel Membership Required*\n\nYou must join our official channel to access tests:\n${escMd(channelDisplay)}\n\nAfter joining, send /start to continue\\.`,
       { parse_mode: "MarkdownV2", reply_markup: joinKb }
     );
     return;
   }
+
+  const timerSeconds = customTimer ?? test.timerSeconds ?? 30;
 
   updateSession(userId, {
     solution: undefined,
@@ -119,13 +204,14 @@ export async function startQuizForUser(
       pollMessageIds: [],
       wrongQuestionIds: [],
       cheatWarnings: 0,
-      timerSeconds: test.timerSeconds ?? 30,
+      timerSeconds,
+      consecutiveCorrect: 0,
     },
   });
 
   if (sendStartMsg) {
     await api.sendMessage(userId,
-      `🚀 *${escMd(test.testName.trim())}* starting\\!\n\n📝 Questions: *${questions.length}*\n⏱️ Timer: *${test.timerSeconds ?? 30}s* per question\n➕ Correct: *\\+${escMd(String(test.positiveMarking))}*  ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n\nAll the best\\! 💪\n\n_Type /stop anytime to end the test_`,
+      `🚀 *${escMd(test.testName.trim())}* starting\\!\n\n📝 Questions: *${questions.length}*\n⏱️ Timer: *${timerSeconds}s* per question\n➕ Correct: *\\+${escMd(String(test.positiveMarking))}*  ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n\nAll the best\\! 💪\n\n_Type /stop anytime to end the test_`,
       { parse_mode: "MarkdownV2" }
     );
   }
@@ -175,6 +261,7 @@ export async function sendNextQuestion(userId: number): Promise<void> {
       const q = s.quiz;
       try { await api.stopPoll(userId, q.currentPollMessageId!); } catch (_) {}
       q.skippedCount++;
+      q.consecutiveCorrect = 0;
       q.currentIndex++;
       q.timer = undefined;
       updateSession(userId, { quiz: q });
@@ -206,9 +293,20 @@ async function generateScorecard(userId: number): Promise<void> {
   const accuracy = totalAnswered > 0 ? parseFloat(((quiz.correctCount / totalAnswered) * 100).toFixed(1)) : 0;
 
   const pollMsgIds = [...quiz.pollMessageIds];
+  const savedAnswers = [...quiz.userAnswers];
+  const savedQuestions = [...quiz.questions];
 
   let attemptId: number | undefined;
+  let prevScore: number | undefined;
+
   if (quiz.testId !== "notebook") {
+    const prevAttempts = await db.select({ score: userHistoryTable.score })
+      .from(userHistoryTable)
+      .where(and(eq(userHistoryTable.userId, userId), eq(userHistoryTable.testId, quiz.testId)))
+      .orderBy(desc(userHistoryTable.completedAt))
+      .limit(1);
+    prevScore = prevAttempts[0]?.score;
+
     const [inserted] = await db.insert(userHistoryTable).values({
       userId, testId: quiz.testId, score, maxScore,
       correctCount: quiz.correctCount, wrongCount: quiz.wrongCount,
@@ -216,6 +314,11 @@ async function generateScorecard(userId: number): Promise<void> {
       userAnswers: quiz.userAnswers,
     }).returning({ id: userHistoryTable.id });
     attemptId = inserted?.id;
+
+    await db.update(usersTable).set({
+      totalTestsTaken: sql`${usersTable.totalTestsTaken} + 1`,
+      accuracyRate: accuracy,
+    }).where(eq(usersTable.userId, userId)).catch(() => {});
   }
 
   if (quiz.wrongQuestionIds.length > 0) {
@@ -245,8 +348,8 @@ async function generateScorecard(userId: number): Promise<void> {
     solution: {
       testId: quiz.testId,
       testName: quiz.testName,
-      questions: quiz.questions,
-      userAnswers: quiz.userAnswers,
+      questions: savedQuestions,
+      userAnswers: savedAnswers,
       currentIndex: 0,
       attemptId,
     },
@@ -264,8 +367,30 @@ async function generateScorecard(userId: number): Promise<void> {
     reply_markup: scorecardKeyboard(quiz.testId),
   });
 
+  const recapMessages = buildFullRecap(savedQuestions, savedAnswers);
+  for (const msg of recapMessages) {
+    try {
+      await api.sendMessage(userId, msg, { parse_mode: "MarkdownV2" });
+    } catch { }
+  }
+
+  if (quiz.testId !== "notebook") {
+    const [userRow] = await db.select({ totalTestsTaken: usersTable.totalTestsTaken })
+      .from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    await checkAndAwardAchievements(userId, {
+      testId: quiz.testId,
+      correctCount: quiz.correctCount,
+      wrongCount: quiz.wrongCount,
+      skippedCount: quiz.skippedCount,
+      score,
+      prevScore,
+      consecutiveCorrect: quiz.consecutiveCorrect,
+      totalTestsTaken: userRow?.totalTestsTaken ?? 0,
+    }).catch(() => {});
+  }
+
   setTimeout(async () => {
-    emitTelemetry(`Auto-cleanup: deleting ${pollMsgIds.length} poll messages for user ${userId}`);
+    emitTelemetry(`Auto-cleanup: deleting ${Math.min(pollMsgIds.length, 50)} poll messages for user ${userId}`);
     await deletePollMessages(userId, pollMsgIds);
   }, 3000);
 }
@@ -312,7 +437,7 @@ export function registerQuizHandlers(bot: Bot): void {
     updateSession(userId, { solution: session.solution });
     await ctx.editMessageText(buildSolutionText(session.solution), {
       parse_mode: "MarkdownV2",
-      reply_markup: solutionNavKeyboard(0, session.solution.questions.length),
+      reply_markup: solutionNavKeyboard(0, session.solution.questions.length, session.solution.testId),
     });
   });
 
@@ -325,7 +450,7 @@ export function registerQuizHandlers(bot: Bot): void {
     updateSession(ctx.from.id, { solution: session.solution });
     await ctx.editMessageText(buildSolutionText(session.solution), {
       parse_mode: "MarkdownV2",
-      reply_markup: solutionNavKeyboard(session.solution.currentIndex, session.solution.questions.length),
+      reply_markup: solutionNavKeyboard(session.solution.currentIndex, session.solution.questions.length, session.solution.testId),
     });
   });
 
@@ -338,7 +463,7 @@ export function registerQuizHandlers(bot: Bot): void {
     updateSession(ctx.from.id, { solution: session.solution });
     await ctx.editMessageText(buildSolutionText(session.solution), {
       parse_mode: "MarkdownV2",
-      reply_markup: solutionNavKeyboard(session.solution.currentIndex, session.solution.questions.length),
+      reply_markup: solutionNavKeyboard(session.solution.currentIndex, session.solution.questions.length, session.solution.testId),
     });
   });
 
@@ -352,10 +477,114 @@ export function registerQuizHandlers(bot: Bot): void {
 
   bot.callbackQuery("sol_noop", async (ctx) => { await ctx.answerCallbackQuery(); });
 
-  bot.callbackQuery("doubt_ai", async (ctx) => {
+  bot.callbackQuery(/^ai_info_/, async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "🤖 Getting AI analysis…" });
+    const userId = ctx.from.id;
+    const session = getSession(userId);
+    if (!session.solution) {
+      await ctx.reply("❌ No solution session active.");
+      return;
+    }
+
+    const qIdx = parseInt(ctx.callbackQuery.data.replace("ai_info_", ""), 10);
+    const q = session.solution.questions[qIdx];
+    if (!q) { await ctx.reply("❌ Question not found."); return; }
+
+    const userAns = session.solution.userAnswers[qIdx];
+    const correctOpt = q.options[q.correctOptionIndex] ?? "?";
+    const userOptText = userAns !== null && userAns !== undefined ? (q.options[userAns] ?? "?") : "Skipped";
+    const wrongOpts = q.options.filter((_, i) => i !== q.correctOptionIndex);
+
+    const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"];
+    const apiKey = process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
+
+    if (!baseUrl || !apiKey) {
+      await ctx.reply("❌ AI service not configured. Ask admin to add OpenRouter API key.");
+      return;
+    }
+
+    const thinkMsg = await ctx.reply("🤖 *AI Info — Analyzing question…*", { parse_mode: "MarkdownV2" });
+
+    try {
+      const prompt = `You are an expert educational AI for Indian competitive exams (SSC, Railway, Banking, Bihar Govt exams).
+
+Analyze this MCQ question:
+Category: ${session.solution.testName}
+Question: ${q.question}
+Options: ${q.options.map((o, i) => `${i + 1}. ${o}`).join(" | ")}
+Correct Answer: ${correctOpt}
+User's Answer: ${userOptText}
+Explanation given: ${q.explanation || "None"}
+
+Give a structured response in this exact format:
+✅ CORRECT ANSWER: [option text]
+📝 WHY CORRECT: [2-3 sentences explaining why this is correct, with exam-relevant facts]
+❌ WHY OTHER OPTIONS ARE WRONG:
+• [Option A]: [one-liner reason]
+• [Option B]: [one-liner reason]
+(only wrong options)
+💡 EXAM TIP: [one exam-relevant tip about this topic]
+
+Keep it concise, clear, in English. Max 200 words total.`;
+
+      const resp = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: "deepseek/deepseek-r1-0528-qwen3-8b:free",
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 500,
+        }),
+      });
+
+      const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message: string } };
+      if (data.error) throw new Error(data.error.message);
+
+      const answer = data.choices?.[0]?.message?.content ?? "Could not get analysis.";
+      const cleanAnswer = answer.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
+
+      const chatId = ctx.chat?.id ?? ctx.from.id;
+      await ctx.api.editMessageText(chatId, thinkMsg.message_id,
+        `🤖 *AI Info — Q${qIdx + 1}*\n\n${cleanAnswer}`,
+        { parse_mode: "MarkdownV2" }
+      );
+    } catch (err) {
+      logger.error({ err }, "AI info error");
+      const chatId = ctx.chat?.id ?? ctx.from.id;
+      await ctx.api.editMessageText(chatId, thinkMsg.message_id,
+        "❌ AI service unavailable. Please try again later."
+      );
+    }
+  });
+
+  bot.callbackQuery(/^report_q_/, async (ctx) => {
     await ctx.answerCallbackQuery();
+    const userId = ctx.from.id;
+    const session = getSession(userId);
+    if (!session.solution) {
+      await ctx.reply("❌ No solution session active.");
+      return;
+    }
+
+    const qIdx = parseInt(ctx.callbackQuery.data.replace("report_q_", ""), 10);
+    const q = session.solution.questions[qIdx];
+    if (!q) { await ctx.reply("❌ Question not found."); return; }
+
+    const userAns = session.solution.userAnswers[qIdx];
+
+    updateSession(userId, {
+      pendingReport: {
+        testId: session.solution.testId,
+        questionIndex: qIdx,
+        questionText: q.question,
+        userAnswer: userAns ?? null,
+        correctAnswer: q.correctOptionIndex,
+        step: "awaiting_text",
+      }
+    });
+
     await ctx.reply(
-      "🤖 *AI Doubt Solver*\n\nType your doubt with the command:\n`/doubt your question here`\n\nExample: `/doubt What is passive voice?`",
+      `🚩 *Report Question Q${qIdx + 1}*\n\n_"${escMd(q.question.slice(0, 100))}"_\n\nPlease type your issue/concern about this question:\n\\(e\\.g\\. "Incorrect answer", "Wrong explanation", "Question is unclear"\\)`,
       { parse_mode: "MarkdownV2" }
     );
   });
@@ -445,20 +674,15 @@ export function registerQuizHandlers(bot: Bot): void {
       `_Use the buttons below to review each question:_`
     );
 
-    const session = getSession(userId);
+    const sol = getSession(userId).solution!;
     await ctx.editMessageText(header, {
       parse_mode: "MarkdownV2",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📖 Review Q1", callback_data: "view_solutions" }],
-        ],
-      },
+      reply_markup: { inline_keyboard: [[{ text: "📖 Review Q1", callback_data: "view_solutions" }]] },
     });
 
-    session.solution!.currentIndex = 0;
-    await ctx.reply(buildSolutionText(session.solution!), {
+    await ctx.reply(buildSolutionText(sol), {
       parse_mode: "MarkdownV2",
-      reply_markup: solutionNavKeyboard(0, questions.length),
+      reply_markup: solutionNavKeyboard(0, questions.length, attempt.testId),
     });
   });
 
@@ -484,16 +708,74 @@ export function registerQuizHandlers(bot: Bot): void {
     await startQuizForUser(userId, test);
   });
 
+  bot.callbackQuery(/^begin_test_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const testId = ctx.callbackQuery.data.replace("begin_test_", "");
+    const userId = ctx.from.id;
+
+    const inSub = await checkForceSub(userId);
+    if (!inSub) {
+      const channel = await getConfig("force_sub_channel") ?? "";
+      const joinUrl = channel.startsWith("@") ? `https://t.me/${channel.replace("@", "")}` : `https://t.me/${channel}`;
+      const joinKb = new InlineKeyboard().url("👉 Join Channel", joinUrl);
+      await ctx.reply(
+        `🔒 *Channel Membership Required*\n\nJoin our channel first:\n${escMd(channel)}\n\nThen come back and try again\\.`,
+        { parse_mode: "MarkdownV2", reply_markup: joinKb }
+      );
+      return;
+    }
+
+    const [user] = await db.select({ tier: usersTable.tier }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    const isPremium = user?.tier === "Premium";
+
+    if (isPremium) {
+      const { timerSelectKeyboard } = await import("../keyboards.js");
+      updateSession(userId, { pendingTimerSelect: testId });
+      await ctx.reply(
+        `⏱️ *Select Your Timer*\n\n💎 As a Premium user, choose how long you want per question:`,
+        { parse_mode: "MarkdownV2", reply_markup: timerSelectKeyboard(testId) }
+      );
+      return;
+    }
+
+    const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
+    if (!test) { await ctx.reply("❌ Test not found."); return; }
+
+    const [ad] = await db.select().from(adsTable).where(eq(adsTable.isActive, true)).limit(1);
+    if (ad) {
+      await showAdGateway(userId, testId, ad);
+      return;
+    }
+
+    await startQuizForUser(userId, test);
+  });
+
+  bot.callbackQuery(/^timer_sel_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const parts = ctx.callbackQuery.data.replace("timer_sel_", "").split("_");
+    const timerSec = parseInt(parts[parts.length - 1] ?? "30", 10);
+    const testId = parts.slice(0, -1).join("_");
+    const userId = ctx.from.id;
+
+    try { await ctx.deleteMessage(); } catch { }
+
+    const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
+    if (!test) { await ctx.reply("❌ Test not found."); return; }
+
+    updateSession(userId, { pendingTimerSelect: undefined });
+    await startQuizForUser(userId, test, true, timerSec);
+  });
+
   bot.callbackQuery(/^start_test_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
     const testId = ctx.callbackQuery.data.replace("start_test_", "");
     const userId = ctx.from.id;
-    const chatId = ctx.chat?.id ?? userId;
     const chatType = ctx.chat?.type ?? "private";
     const isGroup = chatType === "group" || chatType === "supergroup";
 
     if (isGroup) {
       try {
-        const member = await ctx.api.getChatMember(chatId, userId);
+        const member = await ctx.api.getChatMember(ctx.chat!.id, userId);
         if (member.status !== "creator" && member.status !== "administrator") {
           await ctx.answerCallbackQuery({ text: "⚠️ Only group admins can start tests here!", show_alert: true });
           return;
@@ -501,23 +783,37 @@ export function registerQuizHandlers(bot: Bot): void {
       } catch (_) {}
     }
 
-    await ctx.answerCallbackQuery();
-
     const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
     if (!test) { await ctx.reply("❌ Test not found."); return; }
 
-    const [user] = await db.select({ tier: usersTable.tier }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
-    const isPremium = user?.tier === "Premium";
+    const qCount = Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 0;
+    const isFree = test.priceInr === 0 && test.priceInStars === 0;
+    const [purchased] = await db.select().from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    const isPremium = purchased?.tier === "Premium";
+    const hasAccess = isFree || isPremium;
 
-    if (!isPremium) {
-      const [ad] = await db.select().from(adsTable).where(eq(adsTable.isActive, true)).limit(1);
-      if (ad) {
-        await showAdGateway(userId, testId, ad);
-        return;
-      }
+    const botUsername = ctx.me.username ?? "gt_testprobot";
+    const shareLink = `https://t.me/${botUsername}?start=test_${testId}`;
+
+    const { testDetailWithStartKeyboard } = await import("../keyboards.js");
+    await ctx.reply(
+      `📋 *${escMd(test.testName.trim())}*\n\n` +
+      `📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n` +
+      `📝 Questions: *${qCount}*\n` +
+      `⏱️ Timer: *${test.timerSeconds ?? 30}s* per question\n` +
+      `➕ Correct: *\\+${escMd(String(test.positiveMarking))}*   ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n` +
+      `💵 ${isFree ? "✅ Free" : `💰 ₹${test.priceInr}`}\n\n` +
+      `🔗 *Shareable Link:*\n\`${escMd(shareLink)}\``,
+      { parse_mode: "MarkdownV2", reply_markup: hasAccess ? testDetailWithStartKeyboard(testId) : undefined }
+    );
+
+    if (!hasAccess) {
+      const { paymentKeyboard } = await import("../keyboards.js");
+      await ctx.reply(
+        `🔒 *Access Required*\n\nUnlock this test to start practicing:`,
+        { parse_mode: "MarkdownV2", reply_markup: paymentKeyboard(testId, test.priceInr, test.priceInStars) }
+      );
     }
-
-    await startQuizForUser(userId, test);
   });
 
   bot.callbackQuery(/^ad_skip_/, async (ctx) => {
@@ -553,12 +849,15 @@ export function registerQuizHandlers(bot: Bot): void {
     if (userAnswerIndex === undefined) {
       quiz.userAnswers[quiz.currentIndex] = null;
       quiz.skippedCount++;
+      quiz.consecutiveCorrect = 0;
     } else {
       quiz.userAnswers[quiz.currentIndex] = userAnswerIndex;
       if (userAnswerIndex === question.correctOptionIndex) {
         quiz.correctCount++;
+        quiz.consecutiveCorrect = (quiz.consecutiveCorrect ?? 0) + 1;
       } else {
         quiz.wrongCount++;
+        quiz.consecutiveCorrect = 0;
         quiz.wrongQuestionIds.push({ testId: quiz.testId, questionIndex: quiz.currentIndex });
         const responseTime = Date.now() - (quiz.questionSentAt ?? Date.now());
         if (responseTime < 800) {
@@ -612,12 +911,10 @@ async function showAdGateway(userId: number, testId: string, ad: { id: number; a
       if (ad.buttonText && ad.buttonUrl) {
         kb.url(ad.buttonText, ad.buttonUrl).row();
       }
-      kb.text("▶️ Skip Ad & Start Test →", `ad_skip_${testId}`);
+      kb.text("✅ Skip Ad & Start Test", `ad_skip_${testId}`);
       await api.editMessageReplyMarkup(userId, sentMsgId, { reply_markup: kb });
     } catch { }
-    updateSession(userId, { pendingAd: { testId, adMessageId: sentMsgId } });
   }, 15000);
 
   updateSession(userId, { pendingAd: { testId, adMessageId: sentMsgId, skipTimer } });
-  emitTelemetry(`Ad shown to user ${userId} before test ${testId}`);
 }

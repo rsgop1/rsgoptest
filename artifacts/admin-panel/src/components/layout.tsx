@@ -17,6 +17,8 @@ import {
   BarChart2,
   Megaphone,
   Terminal,
+  Flag,
+  Radio,
 } from "lucide-react";
 import { ReactNode } from "react";
 
@@ -27,6 +29,8 @@ const navItems = [
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/flash-sales", label: "Flash Sales", icon: Tag },
   { href: "/ads", label: "Ad Gateway", icon: Megaphone },
+  { href: "/reports", label: "Reports", icon: Flag },
+  { href: "/live-tests", label: "Live Tests", icon: Radio },
   { href: "/users", label: "Users", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/telemetry", label: "Live Terminal", icon: Terminal },

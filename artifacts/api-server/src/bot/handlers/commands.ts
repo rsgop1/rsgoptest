@@ -7,17 +7,40 @@ import {
   wrongQuestionsTable,
   purchasedTestsTable,
   flashSalesTable,
+  reportsTable,
 } from "@workspace/db";
 import { eq, and, gte, lte } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
 import { getSession, updateSession, clearQuiz } from "../session.js";
-import { paymentKeyboard, premiumKeyboard } from "../keyboards.js";
+import { paymentKeyboard, premiumKeyboard, testDetailWithStartKeyboard, paymentKeyboard as pkb } from "../keyboards.js";
 import { sendNextQuestion, startQuizForUser } from "./quiz.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
+}
+
+const KNOWN_COMMANDS = [
+  "/start", "/test_series", "/leaderboard", "/stats",
+  "/notebook", "/challenge", "/premium", "/doubt",
+  "/stop", "/myid", "/anon", "/live",
+];
+
+function looksLikeTypo(text: string): string | null {
+  const typoMap: Record<string, string> = {
+    "/tset": "/test_series", "/tsst": "/test_series", "/tesst": "/test_series",
+    "/test": "/test_series", "/tests": "/test_series", "/tesr": "/test_series",
+    "/strat": "/start", "/satrt": "/start",
+    "/premuim": "/premium", "/premum": "/premium", "/prmium": "/premium",
+    "/notenook": "/notebook", "/notbook": "/notebook", "/nootbook": "/notebook",
+    "/leaederboard": "/leaderboard", "/leadeboard": "/leaderboard",
+    "/stat": "/stats", "/sttas": "/stats",
+    "/dout": "/doubt", "/duobt": "/doubt",
+    "/challegne": "/challenge", "/challege": "/challenge",
+  };
+  const lower = text.toLowerCase().split(/\s/)[0] ?? "";
+  return typoMap[lower] ?? null;
 }
 
 async function getActiveSale(testId: string) {
@@ -51,6 +74,15 @@ export function registerCommandHandlers(bot: Bot): void {
     );
   });
 
+  bot.command("myid", async (ctx) => {
+    const userId = ctx.from!.id;
+    updateSession(userId, { pendingFileIdMode: true });
+    await ctx.reply(
+      `📎 *File ID Helper*\n\nForward or send any image, video, or GIF to me and I'll give you its Telegram File ID\\.\n\nUse that file ID in the admin panel to set up ads\\.\n\n_Send /stop to cancel_`,
+      { parse_mode: "MarkdownV2" }
+    );
+  });
+
   bot.command("test_series", async (ctx) => {
     try {
       const userId = ctx.from!.id;
@@ -66,7 +98,7 @@ export function registerCommandHandlers(bot: Bot): void {
       const purchasedIds = new Set(purchased.map(p => p.testId));
       const isPremium = user?.tier === "Premium";
 
-      let msg = "📚 *Available Mock Tests:*\n\n";
+      let msg = "📚 *Available Mock Tests:*\n_Click any test to see details before starting_\n\n";
       const kb = new InlineKeyboard();
 
       for (const test of tests) {
@@ -74,9 +106,11 @@ export function registerCommandHandlers(bot: Bot): void {
         const hasAccess = isFree || isPremium || purchasedIds.has(test.testId);
         const sale = (!hasAccess && !isFree) ? await getActiveSale(test.testId) : null;
         const lock = hasAccess ? "🔓" : (sale ? "🔥" : "🔒");
+        const qCount = Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 0;
 
         msg += `${lock} *${escMd(test.testName.trim())}*\n`;
         msg += `   📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n`;
+        msg += `   📝 ${qCount} questions \\| ⏱️ ${test.timerSeconds ?? 30}s per Q\n`;
 
         if (!isFree) {
           if (sale) {
@@ -89,12 +123,7 @@ export function registerCommandHandlers(bot: Bot): void {
         }
         msg += "\n";
 
-        if (hasAccess) {
-          kb.text(`▶️ ${test.testName.trim().slice(0, 30)}`, `start_test_${test.testId}`).row();
-        } else {
-          const btnLabel = sale ? `🔥 ${test.testName.trim().slice(0, 24)} — Sale!` : `🔒 ${test.testName.trim().slice(0, 25)} — Unlock`;
-          kb.text(btnLabel, `unlock_test_${test.testId}`).row();
-        }
+        kb.text(`${lock} ${test.testName.trim().slice(0, 30)}`, `start_test_${test.testId}`).row();
       }
 
       await ctx.reply(msg, { parse_mode: "MarkdownV2", reply_markup: kb });
@@ -122,7 +151,7 @@ export function registerCommandHandlers(bot: Bot): void {
 
   bot.command("premium", async (ctx) => {
     await ctx.reply(
-      `💎 *Series TestPro Premium*\n\n*What you get:*\n✅ All mock tests unlocked\n✅ AI Doubt Solver\n✅ Detailed solutions for every question\n✅ Global rank & performance analytics\n✅ Wrong question notebook\n✅ Flash sale early access\n✅ No ads before tests\n\n💰 *Plan:* 30 Days Premium\n💲 ₹199 \\| ⭐ 500 Telegram Stars\n\nChoose your payment method:`,
+      `💎 *Series TestPro Premium*\n\n*What you get:*\n✅ All mock tests unlocked\n✅ AI Info for every question\n✅ Detailed solutions for every question\n✅ Global rank & performance analytics\n✅ Wrong question notebook\n✅ Flash sale early access\n✅ No ads before tests\n✅ *Custom timer* \\(15s–90s per question\\)\n\n💰 *Plan:* 30 Days Premium\n💲 ₹199 \\| ⭐ 500 Telegram Stars\n\nChoose your payment method:`,
       { parse_mode: "MarkdownV2", reply_markup: premiumKeyboard() }
     );
   });
@@ -242,6 +271,7 @@ export function registerCommandHandlers(bot: Bot): void {
           wrongQuestionIds: [],
           cheatWarnings: 0,
           timerSeconds: 30,
+          consecutiveCorrect: 0,
         },
         solution: undefined,
       });
@@ -255,5 +285,97 @@ export function registerCommandHandlers(bot: Bot): void {
       logger.error({ err }, "notebook error");
       await ctx.reply("❌ Error loading notebook. Please try again.");
     }
+  });
+
+  bot.on("message:photo", async (ctx, next) => {
+    const userId = ctx.from!.id;
+    const session = getSession(userId);
+    if (session.pendingFileIdMode) {
+      const photos = ctx.message.photo!;
+      const best = photos[photos.length - 1]!;
+      await ctx.reply(
+        `📎 *Image File ID:*\n\`${best.file_id}\`\n\n_Copy this and paste in the Admin Panel → Ads section_`,
+        { parse_mode: "MarkdownV2" }
+      );
+      return;
+    }
+    return next();
+  });
+
+  bot.on("message:video", async (ctx, next) => {
+    const userId = ctx.from!.id;
+    const session = getSession(userId);
+    if (session.pendingFileIdMode) {
+      const video = ctx.message.video!;
+      await ctx.reply(
+        `📎 *Video File ID:*\n\`${video.file_id}\`\n\n_Copy this and paste in the Admin Panel → Ads section_`,
+        { parse_mode: "MarkdownV2" }
+      );
+      return;
+    }
+    return next();
+  });
+
+  bot.on("message:animation", async (ctx, next) => {
+    const userId = ctx.from!.id;
+    const session = getSession(userId);
+    if (session.pendingFileIdMode) {
+      const gif = ctx.message.animation!;
+      await ctx.reply(
+        `📎 *GIF/Animation File ID:*\n\`${gif.file_id}\`\n\n_Copy this and paste in the Admin Panel → Ads section_`,
+        { parse_mode: "MarkdownV2" }
+      );
+      return;
+    }
+    return next();
+  });
+
+  bot.on("message:text", async (ctx, next) => {
+    const userId = ctx.from!.id;
+    const session = getSession(userId);
+    const text = ctx.message.text ?? "";
+
+    if (session.pendingReport?.step === "awaiting_text") {
+      updateSession(userId, { pendingReport: undefined });
+
+      const report = session.pendingReport!;
+      try {
+        await db.insert(reportsTable).values({
+          userId,
+          testId: report.testId,
+          questionIndex: report.questionIndex,
+          questionText: report.questionText,
+          userAnswer: report.userAnswer ?? undefined,
+          correctAnswer: report.correctAnswer,
+          reportText: text,
+          status: "open",
+        });
+
+        await ctx.reply(
+          `✅ *Report Submitted\\!*\n\nYour report for Q${report.questionIndex + 1} has been sent to the admin\\.\nYou'll receive a notification once it's reviewed\\.`,
+          { parse_mode: "MarkdownV2" }
+        );
+      } catch (err) {
+        logger.error({ err }, "Failed to save report");
+        await ctx.reply("❌ Failed to submit report. Please try again.");
+      }
+      return;
+    }
+
+    if (text.startsWith("/") && !text.startsWith("//")) {
+      const suggestion = looksLikeTypo(text);
+      if (suggestion) {
+        try {
+          await ctx.deleteMessage();
+        } catch { }
+        await ctx.reply(
+          `⚠️ Did you mean *${escMd(suggestion)}*?\n\n_Tip: Type the command correctly to avoid errors_`,
+          { parse_mode: "MarkdownV2" }
+        );
+        return;
+      }
+    }
+
+    return next();
   });
 }

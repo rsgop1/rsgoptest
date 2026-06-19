@@ -13,10 +13,13 @@ import { getConfig } from "./helpers.js";
 import { logger } from "../../lib/logger.js";
 import { randomUUID } from "crypto";
 
-const ADMIN_UPI = "8102289714@ptyes";
-
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
+}
+
+async function getAdminUpi(): Promise<string> {
+  const configured = await getConfig("admin_upi_vpa");
+  return configured ?? "8102289714@ptyes";
 }
 
 async function getEffectivePrice(testId: string, priceInr: number, priceInStars: number): Promise<{ inr: number; stars: number; isOnSale: boolean }> {
@@ -38,6 +41,26 @@ async function getEffectivePrice(testId: string, priceInr: number, priceInStars:
   return { inr: priceInr, stars: priceInStars, isOnSale: false };
 }
 
+function scheduleCartAbandonment(bot: Bot, userId: number, amount: number, testId?: string): ReturnType<typeof setTimeout> {
+  return setTimeout(async () => {
+    const session = getSession(userId);
+    if (!session.pendingUpiPayment) return;
+
+    const discountAmount = Math.round(amount * 0.9);
+    const adminUpi = await getAdminUpi();
+
+    try {
+      await bot.api.sendMessage(
+        userId,
+        `💸 *Payment Incomplete\\?*\n\nWe noticed you generated a payment QR but haven't completed the transaction yet\\.\n\n🎁 *Special Offer:* Pay *₹${discountAmount}* instead of *₹${amount}* \\(10% OFF\\!\\)\n\nThis offer is valid for the next *5 minutes* only\\!\n\n🏦 UPI ID: \`${escMd(adminUpi)}\`\n\nSend screenshot after payment to unlock instantly\\! ⚡`,
+        { parse_mode: "MarkdownV2" }
+      );
+    } catch (err) {
+      logger.warn({ err, userId }, "Cart abandonment message failed");
+    }
+  }, 3 * 60 * 1000);
+}
+
 export function registerPaymentHandlers(bot: Bot): void {
   bot.callbackQuery(/^pay_upi_/, async (ctx) => {
     await ctx.answerCallbackQuery();
@@ -52,17 +75,19 @@ export function registerPaymentHandlers(bot: Bot): void {
     const userId = ctx.from.id;
     const { inr, isOnSale } = await getEffectivePrice(testId, test.priceInr, test.priceInStars);
     const saleTag = isOnSale ? " 🔥 *SALE PRICE*" : "";
+    const adminUpi = await getAdminUpi();
 
-    updateSession(userId, { pendingUpiPayment: { testId, isPremium: false, amount: inr } });
+    const cartTimer = scheduleCartAbandonment(bot, userId, inr, testId);
+    updateSession(userId, { pendingUpiPayment: { testId, isPremium: false, amount: inr, cartAbandonTimer: cartTimer } });
 
     await ctx.reply(
       `💳 *PAY VIA UPI*${saleTag}\n\n` +
       `📦 Test: *${escMd(test.testName)}*\n` +
       `💰 Amount: *₹${inr}*\n\n` +
-      `🏦 UPI ID: \`${ADMIN_UPI}\`\n\n` +
+      `🏦 UPI ID: \`${escMd(adminUpi)}\`\n\n` +
       `*Steps:*\n` +
       `1\\. Open PhonePe / GPay / Paytm\n` +
-      `2\\. Send *₹${inr}* to: \`${escMd(ADMIN_UPI)}\`\n` +
+      `2\\. Send *₹${inr}* to: \`${escMd(adminUpi)}\`\n` +
       `3\\. Note/Remark: \`User\\_${userId}\\_Test\\_${escMd(testId)}\`\n` +
       `4\\. Take a screenshot showing UTR/Transaction ID\n` +
       `5\\. Send that screenshot *in this chat*\n\n` +
@@ -95,8 +120,9 @@ export function registerPaymentHandlers(bot: Bot): void {
       );
     } catch (err) {
       logger.error({ err }, "Stars invoice error");
+      const adminUpi = await getAdminUpi();
       await ctx.reply(
-        `⚠️ *Telegram Stars payment failed\\.*\n\nPossible reasons:\n• Stars payments not enabled for this bot \\(enable via BotFather → Payments\\)\n• Invalid price configuration\n\nPlease use UPI payment instead or contact admin\\.`,
+        `⚠️ *Telegram Stars payment failed\\.*\n\nPossible reasons:\n• Stars payments not enabled for this bot \\(enable via BotFather → Payments\\)\n• Invalid price configuration\n\nPlease use UPI payment instead\\.\nUPI ID: \`${escMd(adminUpi)}\``,
         { parse_mode: "MarkdownV2" }
       );
     }
@@ -105,16 +131,18 @@ export function registerPaymentHandlers(bot: Bot): void {
   bot.callbackQuery("premium_upi", async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = ctx.from.id;
-    updateSession(userId, { pendingUpiPayment: { isPremium: true, amount: 199 } });
+    const adminUpi = await getAdminUpi();
+    const cartTimer = scheduleCartAbandonment(bot, userId, 199);
+    updateSession(userId, { pendingUpiPayment: { isPremium: true, amount: 199, cartAbandonTimer: cartTimer } });
 
     await ctx.reply(
       `💳 *PAY VIA UPI — PREMIUM UPGRADE*\n\n` +
       `💎 Plan: *30 Days Premium Access*\n` +
       `💰 Amount: *₹199*\n\n` +
-      `🏦 UPI ID: \`${ADMIN_UPI}\`\n\n` +
+      `🏦 UPI ID: \`${escMd(adminUpi)}\`\n\n` +
       `*Steps:*\n` +
       `1\\. Open PhonePe / GPay / Paytm\n` +
-      `2\\. Send *₹199* to: \`${escMd(ADMIN_UPI)}\`\n` +
+      `2\\. Send *₹199* to: \`${escMd(adminUpi)}\`\n` +
       `3\\. Note/Remark: \`Premium\\_${userId}\`\n` +
       `4\\. Take a clear screenshot showing UTR/Transaction ID\n` +
       `5\\. Send that screenshot *in this chat*\n\n` +
@@ -129,7 +157,7 @@ export function registerPaymentHandlers(bot: Bot): void {
       await ctx.api.sendInvoice(
         ctx.from.id,
         "Testbook+ Premium — 30 Days",
-        "Unlocks ALL mock tests, AI Doubt Solver, and premium analytics for 30 Days.",
+        "Unlocks ALL mock tests, AI Info Solver, and premium analytics for 30 Days.",
         `premium_30days_${ctx.from.id}_${Date.now()}`,
         "XTR",
         [{ label: "Premium 30 Days", amount: 500 }],
@@ -137,8 +165,9 @@ export function registerPaymentHandlers(bot: Bot): void {
       );
     } catch (err) {
       logger.error({ err }, "Stars premium invoice error");
+      const adminUpi = await getAdminUpi();
       await ctx.reply(
-        `⚠️ *Stars payment failed\\.*\n\nPlease use UPI payment instead\\.\n\nUPI ID: \`${escMd(ADMIN_UPI)}\`\nAmount: *₹199*`,
+        `⚠️ *Stars payment failed\\.*\n\nPlease use UPI payment instead\\.\n\nUPI ID: \`${escMd(adminUpi)}\`\nAmount: *₹199*`,
         { parse_mode: "MarkdownV2" }
       );
     }
@@ -187,12 +216,15 @@ export function registerPaymentHandlers(bot: Bot): void {
     }
   });
 
-  bot.on("message:photo", async (ctx) => {
+  bot.on("message:photo", async (ctx, next) => {
     const userId = ctx.from!.id;
     const session = getSession(userId);
-    if (!session.pendingUpiPayment) return;
+    if (!session.pendingUpiPayment) return next();
 
     const pending = session.pendingUpiPayment;
+    if (pending.cartAbandonTimer) {
+      clearTimeout(pending.cartAbandonTimer);
+    }
     const photos = ctx.message.photo!;
     const bestPhoto = photos[photos.length - 1]!;
 

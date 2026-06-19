@@ -17,6 +17,9 @@ export interface QuizSession {
   questionSentAt?: number;
   cheatWarnings: number;
   timerSeconds: number;
+  consecutiveCorrect: number;
+  isLiveTest?: boolean;
+  liveTestId?: number;
 }
 
 export interface SolutionSession {
@@ -38,6 +41,16 @@ export interface PendingUpiPayment {
   testId?: string;
   isPremium: boolean;
   amount: number;
+  cartAbandonTimer?: ReturnType<typeof setTimeout>;
+}
+
+export interface PendingReport {
+  testId: string;
+  questionIndex: number;
+  questionText: string;
+  userAnswer: number | null;
+  correctAnswer: number;
+  step: "awaiting_text";
 }
 
 export interface UserSession {
@@ -47,6 +60,10 @@ export interface UserSession {
   solution?: SolutionSession;
   pendingUpiPayment?: PendingUpiPayment;
   pendingAd?: AdSession;
+  pendingReport?: PendingReport;
+  pendingAnonDoubt?: boolean;
+  pendingTimerSelect?: string;
+  pendingFileIdMode?: boolean;
 }
 
 const sessions = new Map<number, UserSession>();

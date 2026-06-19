@@ -34,14 +34,15 @@ export function biharSubKeyboard(): InlineKeyboard {
     .text("⬅️ Back", "cat_back_main");
 }
 
-export function solutionNavKeyboard(index: number, total: number, attemptId?: number): InlineKeyboard {
+export function solutionNavKeyboard(index: number, total: number, testId?: string, attemptId?: number): InlineKeyboard {
   const kb = new InlineKeyboard();
   if (index > 0) kb.text("⬅️ Prev", `sol_prev_${index}`);
   else kb.text("·", "sol_noop");
   kb.text(`📄 ${index + 1}/${total}`, "sol_noop");
   if (index < total - 1) kb.text("Next ➡️", `sol_next_${index}`);
   else kb.text("·", "sol_noop");
-  kb.row().text("🏠 Home", "sol_home").text("❓ AI Doubt", "doubt_ai");
+  kb.row().text("🤖 AI Info", `ai_info_${index}`).text("🚩 Report", `report_q_${index}`);
+  kb.row().text("🏠 Home", "sol_home");
   return kb;
 }
 
@@ -69,6 +70,19 @@ export function testDetailKeyboard(testId: string): InlineKeyboard {
     .text("📚 View All Tests", "go_test_series");
 }
 
+export function testDetailWithStartKeyboard(testId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("🚀 Start Test", `begin_test_${testId}`).row()
+    .text("📚 All Tests", "go_test_series");
+}
+
+export function timerSelectKeyboard(testId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("15s ⚡", `timer_sel_${testId}_15`).text("30s 🕐", `timer_sel_${testId}_30`).text("45s 🕐", `timer_sel_${testId}_45`).row()
+    .text("60s 🐢", `timer_sel_${testId}_60`).text("90s 🦥", `timer_sel_${testId}_90`).row()
+    .text("❌ Cancel", "go_test_series");
+}
+
 export function attemptsKeyboard(testId: string, attemptIds: number[]): InlineKeyboard {
   const kb = new InlineKeyboard();
   for (let i = 0; i < attemptIds.length; i++) {
@@ -77,4 +91,9 @@ export function attemptsKeyboard(testId: string, attemptIds: number[]): InlineKe
   }
   kb.row().text("⬅️ Back to Tests", "go_test_series");
   return kb;
+}
+
+export function liveTestJoinKeyboard(liveTestId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("✋ Join Live Test", `live_join_${liveTestId}`);
 }

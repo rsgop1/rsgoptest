@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { db } from "@workspace/db";
-import { usersTable, testSeriesTable } from "@workspace/db";
+import { usersTable, testSeriesTable, purchasedTestsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import {
   mainCategoryKeyboard,
@@ -9,11 +9,13 @@ import {
   railwaySubKeyboard,
   bankingSubKeyboard,
   biharSubKeyboard,
-  testDetailKeyboard,
+  testDetailWithStartKeyboard,
+  paymentKeyboard,
 } from "../keyboards.js";
 import { getSession, updateSession } from "../session.js";
 import { handleChallengeStart } from "./challenge.js";
 import { getConfig } from "./helpers.js";
+import { trySetGroupTitles } from "./achievements.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 
@@ -41,6 +43,8 @@ function dashboardMsg(name: string, sub: string, tier: string, refLink: string):
 /challenge — Start a group challenge
 /premium — Upgrade to Premium
 /doubt — AI Doubt Solver
+/anon — Post anonymous doubt in group
+/myid — Get Telegram file IDs \\(for admins\\)
 
 👥 *Your Referral Link:*
 \`${escMd(refLink)}\``;
@@ -73,7 +77,7 @@ async function upsertUser(
   }
 }
 
-async function checkForceSub(userId: number): Promise<{ allowed: boolean; channel: string }> {
+export async function checkForceSubStatus(userId: number): Promise<{ allowed: boolean; channel: string }> {
   try {
     const forceSub = await getConfig("force_sub_enabled");
     if (forceSub !== "true") return { allowed: true, channel: "" };
@@ -82,12 +86,20 @@ async function checkForceSub(userId: number): Promise<{ allowed: boolean; channe
 
     const { getApi } = await import("../api-instance.js");
     const api = getApi();
-    const channelId: string | number = channel.startsWith("@") ? channel : (isNaN(Number(channel)) ? channel : Number(channel));
+
+    let channelId: string | number = channel.trim();
+    if (!channelId.startsWith("@")) {
+      const num = Number(channelId);
+      channelId = isNaN(num) ? channelId : num;
+    }
+
     const member = await api.getChatMember(channelId as string, userId);
-    const allowed = member.status !== "left" && member.status !== "kicked" && member.status !== "restricted";
+    const allowed = member.status === "member" || member.status === "creator" || member.status === "administrator";
     return { allowed, channel };
-  } catch {
-    return { allowed: true, channel: "" };
+  } catch (err) {
+    logger.warn({ err }, "Force sub check failed — blocking user as safe default");
+    const channel = await getConfig("force_sub_channel") ?? "";
+    return { allowed: false, channel };
   }
 }
 
@@ -108,11 +120,14 @@ export function registerStartHandlers(bot: Bot): void {
         const testId = param.replace("test_", "");
         await upsertUser(from.id, from.first_name, from.last_name, from.username);
 
-        const { allowed, channel } = await checkForceSub(from.id);
+        const { allowed, channel } = await checkForceSubStatus(from.id);
         if (!allowed) {
-          const joinKb = new InlineKeyboard().url("👉 Join Channel", `https://t.me/${channel.replace("@", "")}`);
+          const joinUrl = channel.startsWith("@")
+            ? `https://t.me/${channel.replace("@", "")}`
+            : `https://t.me/c/${channel.replace("-100", "")}`;
+          const joinKb = new InlineKeyboard().url("👉 Join Channel", joinUrl);
           await ctx.reply(
-            `🔒 *Channel Membership Required*\n\nJoin our channel first:\n${escMd(channel)}\n\nAfter joining, send /start to continue\\.`,
+            `🔒 *Channel Membership Required*\n\nJoin our channel first:\n${escMd(channel)}\n\nAfter joining, come back and try again\\.`,
             { parse_mode: "MarkdownV2", reply_markup: joinKb }
           );
           return;
@@ -124,18 +139,40 @@ export function registerStartHandlers(bot: Bot): void {
           return;
         }
 
-        const qCount = Array.isArray(test.questionsData) ? test.questionsData.length : 0;
-        const freeOrPaid = test.priceInr === 0 ? "✅ Free" : `💰 ₹${test.priceInr}`;
+        const [user] = await db.select({ tier: usersTable.tier }).from(usersTable).where(eq(usersTable.userId, from.id)).limit(1);
+        const isPremium = user?.tier === "Premium";
+        const isFree = test.priceInr === 0 && test.priceInStars === 0;
+        const [purchased] = await db.select().from(purchasedTestsTable)
+          .where(eq(purchasedTestsTable.userId, from.id))
+          .limit(1);
+        const hasPurchased = !!purchased;
+        const hasAccess = isFree || isPremium || hasPurchased;
+
+        const qCount = Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 0;
+        const botUsername = ctx.me.username ?? "gt_testprobot";
+        const shareLink = `https://t.me/${botUsername}?start=test_${testId}`;
+
         await ctx.reply(
           `📋 *${escMd(test.testName.trim())}*\n\n` +
           `📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n` +
           `📝 Questions: *${qCount}*\n` +
           `⏱️ Timer: *${test.timerSeconds ?? 30}s* per question\n` +
           `➕ Correct: *\\+${escMd(String(test.positiveMarking))}*   ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n` +
-          `💵 ${freeOrPaid}\n\n` +
-          `Tap *Start Test Now* to begin\\!`,
-          { parse_mode: "MarkdownV2", reply_markup: testDetailKeyboard(test.testId) }
+          `💵 ${isFree ? "✅ Free" : `💰 ₹${test.priceInr}`}\n\n` +
+          `🔗 *Shareable Link:*\n\`${escMd(shareLink)}\`\n\n` +
+          (hasAccess ? `Tap *Start Test* to begin\\!` : `❌ *You don't have access to this test\\.*`),
+          {
+            parse_mode: "MarkdownV2",
+            reply_markup: hasAccess ? testDetailWithStartKeyboard(testId) : undefined,
+          }
         );
+
+        if (!hasAccess) {
+          await ctx.reply(
+            `🔒 *Unlock to Access This Test*\n\nChoose a payment method to get instant access:`,
+            { parse_mode: "MarkdownV2", reply_markup: paymentKeyboard(testId, test.priceInr, test.priceInStars) }
+          );
+        }
         return;
       }
 
@@ -151,11 +188,14 @@ export function registerStartHandlers(bot: Bot): void {
       const botUsername = ctx.me.username ?? "gt_testprobot";
       const refLink = `https://t.me/${botUsername}?start=ref_${from.id}`;
 
-      const { allowed, channel } = await checkForceSub(from.id);
+      const { allowed, channel } = await checkForceSubStatus(from.id);
       if (!allowed) {
-        const joinKb = new InlineKeyboard().url("👉 Join Channel", `https://t.me/${channel.replace("@", "")}`);
+        const joinUrl = channel.startsWith("@")
+          ? `https://t.me/${channel.replace("@", "")}`
+          : `https://t.me/c/${channel.replace("-100", "")}`;
+        const joinKb = new InlineKeyboard().url("👉 Join Channel", joinUrl);
         await ctx.reply(
-          `🔒 *Channel Membership Required*\n\nJoin our channel to use Series TestPro:\n${escMd(channel)}\n\nAfter joining, come back and send /start\\.`,
+          `🔒 *Channel Membership Required*\n\nJoin our official channel to use Series TestPro:\n${escMd(channel)}\n\nAfter joining, send /start to continue\\.`,
           { parse_mode: "MarkdownV2", reply_markup: joinKb }
         );
         return;
@@ -172,6 +212,7 @@ export function registerStartHandlers(bot: Bot): void {
         const sub = user?.targetExamSub ?? "Not set";
         const tier = user?.tier ?? "Free";
         await ctx.reply(dashboardMsg(from.first_name, sub, tier, refLink), { parse_mode: "MarkdownV2" });
+        await trySetGroupTitles(from.id).catch(() => {});
       }
     } catch (err) {
       logger.error({ err }, "start command error");
