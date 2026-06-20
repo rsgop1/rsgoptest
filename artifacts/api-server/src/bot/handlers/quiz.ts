@@ -7,6 +7,7 @@ import {
   usersTable,
   adsTable,
   reportsTable,
+  purchasedTestsTable,
 } from "@workspace/db";
 import { eq, and, count, gt, desc, sql } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
@@ -17,7 +18,7 @@ import {
   type SolutionSession,
 } from "../session.js";
 import { getApi } from "../api-instance.js";
-import { scorecardKeyboard, solutionNavKeyboard, attemptsKeyboard } from "../keyboards.js";
+import { scorecardKeyboard, solutionNavKeyboard, attemptsKeyboard, reattemptChoiceKeyboard, skipQuestionKeyboard } from "../keyboards.js";
 import { logger } from "../../lib/logger.js";
 import { getConfig } from "./helpers.js";
 import { postChallengeResult } from "./challenge.js";
@@ -189,6 +190,7 @@ export async function startQuizForUser(
   }
 
   const timerSeconds = customTimer ?? test.timerSeconds ?? 30;
+  const noTimer = timerSeconds === 0;
 
   updateSession(userId, {
     solution: undefined,
@@ -210,8 +212,9 @@ export async function startQuizForUser(
   });
 
   if (sendStartMsg) {
+    const timerDisplay = noTimer ? "♾️ No Limit \\(Premium\\)" : `*${timerSeconds}s* per question`;
     await api.sendMessage(userId,
-      `🚀 *${escMd(test.testName.trim())}* starting\\!\n\n📝 Questions: *${questions.length}*\n⏱️ Timer: *${timerSeconds}s* per question\n➕ Correct: *\\+${escMd(String(test.positiveMarking))}*  ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n\nAll the best\\! 💪\n\n_Type /stop anytime to end the test_`,
+      `🚀 *${escMd(test.testName.trim())}* starting\\!\n\n📝 Questions: *${questions.length}*\n⏱️ Timer: ${timerDisplay}\n➕ Correct: *\\+${escMd(String(test.positiveMarking))}*  ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n\nAll the best\\! 💪\n\n_Type /stop anytime to end the test_`,
       { parse_mode: "MarkdownV2" }
     );
   }
@@ -234,19 +237,24 @@ export async function sendNextQuestion(userId: number): Promise<void> {
   const question = quiz.questions[quiz.currentIndex]!;
   quiz.questionSentAt = Date.now();
   const timerSec = quiz.timerSeconds ?? 30;
+  const noTimer = timerSec === 0;
 
   try {
+    const pollOpts: any = {
+      type: "quiz",
+      correct_option_ids: [question.correctOptionIndex],
+      explanation: question.explanation ? question.explanation.slice(0, 200) : undefined,
+      is_anonymous: false,
+    };
+    if (!noTimer) {
+      pollOpts.open_period = timerSec;
+    }
+
     const msg = await api.sendPoll(
       userId,
       question.question.slice(0, 300),
       question.options.map(o => ({ text: o.slice(0, 100) })),
-      {
-        type: "quiz",
-        correct_option_ids: [question.correctOptionIndex],
-        explanation: question.explanation ? question.explanation.slice(0, 200) : undefined,
-        is_anonymous: false,
-        open_period: timerSec,
-      }
+      pollOpts
     );
 
     quiz.currentPollMessageId = msg.message_id;
@@ -254,20 +262,28 @@ export async function sendNextQuestion(userId: number): Promise<void> {
     const pollData = (msg as any).poll;
     quiz.currentPollId = pollData?.id as string | undefined;
 
-    const pollIdSnapshot = quiz.currentPollId;
-    quiz.timer = setTimeout(async () => {
-      const s = getSession(userId);
-      if (!s.quiz || s.quiz.currentPollId !== pollIdSnapshot) return;
-      const q = s.quiz;
-      try { await api.stopPoll(userId, q.currentPollMessageId!); } catch (_) {}
-      q.skippedCount++;
-      q.consecutiveCorrect = 0;
-      q.currentIndex++;
-      q.timer = undefined;
-      updateSession(userId, { quiz: q });
-      await api.sendMessage(userId, "⏳ *Time's up\\!* Moving to next question\\.", { parse_mode: "MarkdownV2" });
-      await sendNextQuestion(userId);
-    }, timerSec * 1000);
+    if (noTimer) {
+      const skipMsg = await api.sendMessage(userId,
+        `⏭️ Q${quiz.currentIndex + 1}/${quiz.questions.length} — _No time limit mode_`,
+        { parse_mode: "MarkdownV2", reply_markup: skipQuestionKeyboard(msg.message_id) }
+      );
+      quiz.pollMessageIds.push(skipMsg.message_id);
+    } else {
+      const pollIdSnapshot = quiz.currentPollId;
+      quiz.timer = setTimeout(async () => {
+        const s = getSession(userId);
+        if (!s.quiz || s.quiz.currentPollId !== pollIdSnapshot) return;
+        const q = s.quiz;
+        try { await api.stopPoll(userId, q.currentPollMessageId!); } catch (_) {}
+        q.skippedCount++;
+        q.consecutiveCorrect = 0;
+        q.currentIndex++;
+        q.timer = undefined;
+        updateSession(userId, { quiz: q });
+        await api.sendMessage(userId, "⏳ *Time's up\\!* Moving to next question\\.", { parse_mode: "MarkdownV2" });
+        await sendNextQuestion(userId);
+      }, timerSec * 1000);
+    }
 
     updateSession(userId, { quiz });
   } catch (err) {
@@ -476,6 +492,28 @@ export function registerQuizHandlers(bot: Bot): void {
   });
 
   bot.callbackQuery("sol_noop", async (ctx) => { await ctx.answerCallbackQuery(); });
+  bot.callbackQuery("ad_noop", async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "⏳ Please wait 15 seconds before skipping...", show_alert: false });
+  });
+
+  bot.callbackQuery(/^skip_q_/, async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "⏭️ Question skipped" });
+    const userId = ctx.from.id;
+    const session = getSession(userId);
+    const quiz = session.quiz;
+    if (!quiz || quiz.timerSeconds !== 0) return;
+    const pollMsgId = quiz.currentPollMessageId;
+    if (pollMsgId) {
+      try { await ctx.api.stopPoll(userId, pollMsgId); } catch (_) {}
+    }
+    try { await ctx.deleteMessage(); } catch (_) {}
+    quiz.skippedCount++;
+    quiz.consecutiveCorrect = 0;
+    quiz.userAnswers[quiz.currentIndex] = null;
+    quiz.currentIndex++;
+    updateSession(userId, { quiz });
+    await sendNextQuestion(userId);
+  });
 
   bot.callbackQuery(/^ai_info_/, async (ctx) => {
     const userId = ctx.from.id;
@@ -517,7 +555,7 @@ export function registerQuizHandlers(bot: Bot): void {
     const thinkMsg = await ctx.reply("🤖 *AI analyzing…*", { parse_mode: "MarkdownV2" });
 
     try {
-      const difficulty = q.difficulty ?? "medium";
+      const difficulty = (q as any).difficulty ?? "medium";
       const wrongOptsText = q.options
         .map((o, i) => i !== q.correctOptionIndex ? `• ${o}` : null)
         .filter(Boolean)
@@ -761,8 +799,8 @@ Keep total response under 180 words. Plain English only. No bullet symbols excep
       const { timerSelectKeyboard } = await import("../keyboards.js");
       updateSession(userId, { pendingTimerSelect: testId });
       await ctx.reply(
-        `⏱️ *Select Your Timer*\n\n💎 As a Premium user, choose how long you want per question:`,
-        { parse_mode: "MarkdownV2", reply_markup: timerSelectKeyboard(testId) }
+        `⏱️ *Select Your Timer*\n\n💎 As a Premium user, choose how long you want per question:\n_\\(Choose ♾️ No Time Limit for self\\-paced practice\\)_`,
+        { parse_mode: "MarkdownV2", reply_markup: timerSelectKeyboard(testId, true) }
       );
       return;
     }
@@ -817,32 +855,47 @@ Keep total response under 180 words. Plain English only. No bullet symbols excep
 
     const qCount = Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 0;
     const isFree = test.priceInr === 0 && test.priceInStars === 0;
-    const [purchased] = await db.select().from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
-    const isPremium = purchased?.tier === "Premium";
-    const hasAccess = isFree || isPremium;
+    const [userRow] = await db.select().from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    const isPremium = userRow?.tier === "Premium";
+    const [purchasedRow] = await db.select().from(purchasedTestsTable).where(and(eq(purchasedTestsTable.userId, userId), eq(purchasedTestsTable.testId, testId))).limit(1);
+    const hasAccess = isFree || isPremium || !!purchasedRow;
 
     const botUsername = ctx.me.username ?? "gt_testprobot";
     const shareLink = `https://t.me/${botUsername}?start=test_${testId}`;
 
-    const { testDetailWithStartKeyboard } = await import("../keyboards.js");
+    if (!hasAccess) {
+      const { paymentKeyboard } = await import("../keyboards.js");
+      await ctx.reply(
+        `📋 *${escMd(test.testName.trim())}*\n\n` +
+        `📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n` +
+        `📝 Questions: *${qCount}*\n` +
+        `⏱️ Timer: *${test.timerSeconds ?? 30}s* per question\n` +
+        `💵 💰 ₹${test.priceInr}\n\n` +
+        `🔒 *Unlock to access this test:*`,
+        { parse_mode: "MarkdownV2", reply_markup: paymentKeyboard(testId, test.priceInr, test.priceInStars) }
+      );
+      return;
+    }
+
+    const [prevAttempt] = await db.select({ id: userHistoryTable.id })
+      .from(userHistoryTable)
+      .where(and(eq(userHistoryTable.userId, userId), eq(userHistoryTable.testId, testId)))
+      .limit(1);
+
+    const { testDetailWithStartKeyboard, reattemptChoiceKeyboard } = await import("../keyboards.js");
+    const keyboard = prevAttempt ? reattemptChoiceKeyboard(testId) : testDetailWithStartKeyboard(testId);
+    const reattemptNote = prevAttempt ? `\n\n🔄 _You've attempted this test before\\!_` : "";
+
     await ctx.reply(
       `📋 *${escMd(test.testName.trim())}*\n\n` +
       `📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n` +
       `📝 Questions: *${qCount}*\n` +
       `⏱️ Timer: *${test.timerSeconds ?? 30}s* per question\n` +
-      `➕ Correct: *\\+${escMd(String(test.positiveMarking))}*   ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n` +
-      `💵 ${isFree ? "✅ Free" : `💰 ₹${test.priceInr}`}\n\n` +
-      `🔗 *Shareable Link:*\n\`${escMd(shareLink)}\``,
-      { parse_mode: "MarkdownV2", reply_markup: hasAccess ? testDetailWithStartKeyboard(testId) : undefined }
+      `➕ Correct: *\\+${escMd(String(test.positiveMarking))}*   ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n\n` +
+      `🔗 *Shareable Link:*\n\`${escMd(shareLink)}\`` +
+      reattemptNote,
+      { parse_mode: "MarkdownV2", reply_markup: keyboard }
     );
-
-    if (!hasAccess) {
-      const { paymentKeyboard } = await import("../keyboards.js");
-      await ctx.reply(
-        `🔒 *Access Required*\n\nUnlock this test to start practicing:`,
-        { parse_mode: "MarkdownV2", reply_markup: paymentKeyboard(testId, test.priceInr, test.priceInStars) }
-      );
-    }
   });
 
   bot.callbackQuery(/^ad_skip_/, async (ctx) => {

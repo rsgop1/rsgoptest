@@ -197,7 +197,7 @@ export default function Tests() {
   const mainCategories = Object.keys(categories);
   const subCategories = formData.mainCategory ? (categories[formData.mainCategory] ?? []) : [];
 
-  const FormFields = ({ isEdit = false }: { isEdit?: boolean }) => (
+  const renderFormFields = (isEdit = false) => (
     <div className="space-y-6 mt-4">
       <div className="grid grid-cols-2 gap-4">
         <div className="col-span-2 space-y-2">
@@ -339,7 +339,7 @@ export default function Tests() {
             🔑 Test ID will be auto-generated (6-char hex).
           </p>
           <form onSubmit={handleImport}>
-            <FormFields />
+            {renderFormFields()}
             <DialogFooter className="mt-6">
               <Button type="button" variant="outline" onClick={() => setImportOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={submitting}>
@@ -355,7 +355,7 @@ export default function Tests() {
           <DialogHeader><DialogTitle>Edit Test Series</DialogTitle></DialogHeader>
           <p className="text-xs text-muted-foreground -mt-2 font-mono">ID: {editTestId}</p>
           <form onSubmit={handleEdit}>
-            <FormFields isEdit />
+            {renderFormFields(true)}
             <DialogFooter className="mt-6">
               <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={submitting}>

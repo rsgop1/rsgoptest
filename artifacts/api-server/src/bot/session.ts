@@ -41,7 +41,16 @@ export interface PendingUpiPayment {
   testId?: string;
   isPremium: boolean;
   amount: number;
+  originalAmount?: number;
+  couponCode?: string;
   cartAbandonTimer?: ReturnType<typeof setTimeout>;
+}
+
+export interface PendingCoupon {
+  testId?: string;
+  isPremium: boolean;
+  originalInr: number;
+  originalStars: number;
 }
 
 export interface PendingReport {
@@ -64,6 +73,9 @@ export interface UserSession {
   pendingAnonDoubt?: boolean;
   pendingTimerSelect?: string;
   pendingFileIdMode?: boolean;
+  pendingCoupon?: PendingCoupon;
+  awaitingCouponInput?: boolean;
+  pendingPypTestId?: string;
 }
 
 const sessions = new Map<number, UserSession>();

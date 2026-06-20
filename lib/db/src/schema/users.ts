@@ -17,6 +17,8 @@ export const usersTable = pgTable("users", {
   referralCount: integer("referral_count").notNull().default(0),
   anonDoubtsUsed: integer("anon_doubts_used").notNull().default(0),
   anonDoubtDate: text("anon_doubt_date"),
+  aiDoubtCount: integer("ai_doubt_count").notNull().default(0),
+  aiDoubtDate: text("ai_doubt_date"),
   joinedAt: timestamp("joined_at").notNull().defaultNow(),
 });
 

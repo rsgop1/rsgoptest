@@ -6,11 +6,13 @@ import {
   testSeriesTable,
   purchasedTestsTable,
   globalConfigTable,
+  couponCodesTable,
+  liveTestsTable,
 } from "@workspace/db";
 import { eq, and, count, gte, sql } from "drizzle-orm";
 import { layout, statCard, alert } from "./html.js";
 import { getApi } from "../bot/api-instance.js";
-import { setConfig } from "../bot/handlers/helpers.js";
+import { setConfig, getConfig } from "../bot/handlers/helpers.js";
 import { logger } from "../lib/logger.js";
 import { randomUUID } from "crypto";
 
@@ -478,6 +480,150 @@ router.post("/settings/broadcast", requireAuth, async (req, res) => {
   } catch (err) {
     logger.error({ err }, "Broadcast error");
     res.redirect("/admin/settings");
+  }
+});
+
+router.get("/ai-settings", requireAuth, async (_req, res) => {
+  try {
+    const aiEnabled = await getConfig("ai_enabled");
+    const doubtPrompt = await getConfig("doubt_prompt");
+    const aiInfoPrompt = await getConfig("ai_info_prompt");
+    res.json({
+      aiEnabled: aiEnabled !== "false",
+      doubtPrompt: doubtPrompt ?? "",
+      aiInfoPrompt: aiInfoPrompt ?? "",
+    });
+  } catch (err) {
+    logger.error({ err }, "Error getting AI settings");
+    res.status(500).json({ error: "Failed to load AI settings" });
+  }
+});
+
+router.post("/ai-settings", requireAuth, async (req, res) => {
+  try {
+    const { aiEnabled, doubtPrompt, aiInfoPrompt } = req.body as {
+      aiEnabled: boolean;
+      doubtPrompt: string;
+      aiInfoPrompt: string;
+    };
+    await setConfig("ai_enabled", String(aiEnabled));
+    if (doubtPrompt !== undefined) await setConfig("doubt_prompt", doubtPrompt);
+    if (aiInfoPrompt !== undefined) await setConfig("ai_info_prompt", aiInfoPrompt);
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Error saving AI settings");
+    res.status(500).json({ error: "Failed to save AI settings" });
+  }
+});
+
+router.get("/coupons", requireAuth, async (_req, res) => {
+  try {
+    const coupons = await db.select().from(couponCodesTable).orderBy(couponCodesTable.id);
+    res.json(coupons);
+  } catch (err) {
+    logger.error({ err }, "Error listing coupons");
+    res.status(500).json({ error: "Failed to load coupons" });
+  }
+});
+
+router.post("/coupons", requireAuth, async (req, res) => {
+  try {
+    const { code, discountInr, discountStars, discountPct, usageLimit, expiresAt } = req.body as {
+      code: string;
+      discountInr: number;
+      discountStars: number;
+      discountPct: number;
+      usageLimit: number;
+      expiresAt?: string;
+    };
+    if (!code?.trim()) {
+      res.status(400).json({ error: "Coupon code is required" });
+      return;
+    }
+    const [coupon] = await db.insert(couponCodesTable).values({
+      code: code.toUpperCase().trim(),
+      discountInr: discountInr ?? 0,
+      discountStars: discountStars ?? 0,
+      discountPct: discountPct ?? 0,
+      usageLimit: usageLimit ?? 100,
+      expiresAt: expiresAt ? new Date(expiresAt) : null,
+    }).returning();
+    res.json(coupon);
+  } catch (err: any) {
+    logger.error({ err }, "Error creating coupon");
+    if (err.code === "23505") {
+      res.status(409).json({ error: "Coupon code already exists" });
+    } else {
+      res.status(500).json({ error: "Failed to create coupon" });
+    }
+  }
+});
+
+router.delete("/coupons/:id", requireAuth, async (req, res) => {
+  try {
+    const id = parseInt(String(req.params["id"] ?? "0"));
+    await db.delete(couponCodesTable).where(eq(couponCodesTable.id, id));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Error deleting coupon");
+    res.status(500).json({ error: "Failed to delete coupon" });
+  }
+});
+
+router.post("/live-tests/:id/stop", requireAuth, async (req, res) => {
+  try {
+    const id = parseInt(String(req.params["id"] ?? "0"));
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Live test not found" }); return; }
+
+    await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, id));
+
+    const participantIds: number[] = Array.isArray(lt.participants) ? lt.participants as number[] : [];
+    const api = getApi();
+    for (const userId of participantIds) {
+      try {
+        await api.sendMessage(userId,
+          `🏁 *Live Test Ended*\n\nThe admin has ended the live test: *${lt.title.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, c => `\\${c}`)}*\\.\n\nThank you for participating\\! Check your scorecard via /test\\_series\\.`,
+          { parse_mode: "MarkdownV2" }
+        );
+        await new Promise(r => setTimeout(r, 50));
+      } catch (_) {}
+    }
+
+    res.json({ ok: true, notified: participantIds.length });
+  } catch (err) {
+    logger.error({ err }, "Error stopping live test");
+    res.status(500).json({ error: "Failed to stop live test" });
+  }
+});
+
+router.post("/live-tests/:id/message", requireAuth, async (req, res) => {
+  try {
+    const id = parseInt(String(req.params["id"] ?? "0"));
+    const { message } = req.body as { message: string };
+    if (!message?.trim()) { res.status(400).json({ error: "Message is required" }); return; }
+
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Live test not found" }); return; }
+
+    const participantIds: number[] = Array.isArray(lt.participants) ? lt.participants as number[] : [];
+    const api = getApi();
+    let sent = 0;
+    for (const userId of participantIds) {
+      try {
+        await api.sendMessage(userId,
+          `📢 *Live Test Update: ${lt.title}*\n\n${message}`,
+          { parse_mode: "Markdown" }
+        );
+        sent++;
+        await new Promise(r => setTimeout(r, 50));
+      } catch (_) {}
+    }
+
+    res.json({ ok: true, sent, total: participantIds.length });
+  } catch (err) {
+    logger.error({ err }, "Error sending live test message");
+    res.status(500).json({ error: "Failed to send message" });
   }
 });
 

@@ -19,7 +19,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Trash2, Radio, Users, Clock, Calendar } from "lucide-react";
+import { Plus, Trash2, Radio, Users, Clock, Calendar, StopCircle, MessageSquare } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
 interface LiveTest {
@@ -117,6 +118,30 @@ export default function LiveTests() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const stopMut = useMutation({
+    mutationFn: (id: number) =>
+      apiFetch(`/live-tests/${id}/stop`, { method: "POST" }),
+    onSuccess: () => {
+      toast.success("Live test stopped — scoreboards sent to all participants");
+      qc.invalidateQueries({ queryKey: ["admin-live-tests"] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const [msgTarget, setMsgTarget] = useState<number | null>(null);
+  const [msgText, setMsgText] = useState("");
+
+  const sendMsgMut = useMutation({
+    mutationFn: ({ id, message }: { id: number; message: string }) =>
+      apiFetch(`/live-tests/${id}/message`, { method: "POST", body: JSON.stringify({ message }) }),
+    onSuccess: () => {
+      toast.success("Message sent to all participants!");
+      setMsgTarget(null);
+      setMsgText("");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   const upcoming = liveTests.filter((t) => t.status === "scheduled" || t.status === "notified" || t.status === "live");
   const past = liveTests.filter((t) => t.status === "completed");
 
@@ -171,17 +196,42 @@ export default function LiveTests() {
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">Test ID: {lt.testId}</p>
                   </div>
-                  {lt.status !== "live" && (
+                  <div className="flex items-center gap-1 shrink-0">
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="text-destructive hover:text-destructive shrink-0"
-                      onClick={() => cancelMut.mutate(lt.id)}
-                      disabled={cancelMut.isPending}
+                      title="Send message to all participants"
+                      onClick={() => { setMsgTarget(lt.id); setMsgText(""); }}
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <MessageSquare className="h-4 w-4 text-blue-500" />
                     </Button>
-                  )}
+                    {lt.status === "live" ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Force stop live test"
+                        className="text-orange-500 hover:text-orange-600"
+                        onClick={() => {
+                          if (confirm("Force-stop this live test? All participants will get their current scorecard.")) {
+                            stopMut.mutate(lt.id);
+                          }
+                        }}
+                        disabled={stopMut.isPending}
+                      >
+                        <StopCircle className="h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => cancelMut.mutate(lt.id)}
+                        disabled={cancelMut.isPending}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -228,6 +278,37 @@ export default function LiveTests() {
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={msgTarget !== null} onOpenChange={(open) => { if (!open) setMsgTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MessageSquare className="h-5 w-5 text-blue-500" />
+              Send Message to Participants
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              This message will be sent to ALL participants of this live test via Telegram bot.
+            </p>
+            <Textarea
+              rows={4}
+              value={msgText}
+              onChange={(e) => setMsgText(e.target.value)}
+              placeholder="e.g. Test starts in 5 minutes! Get ready 🔥"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMsgTarget(null)}>Cancel</Button>
+            <Button
+              disabled={!msgText.trim() || sendMsgMut.isPending}
+              onClick={() => msgTarget && sendMsgMut.mutate({ id: msgTarget, message: msgText })}
+            >
+              {sendMsgMut.isPending ? "Sending…" : "Send Message"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>

@@ -4,3 +4,6 @@
 - [Grammy promoteChatMember quirks](grammy-promote-member.md) — `can_be_edited` param does NOT exist in Grammy's type for promoteChatMember; omit it.
 - [Payments table column name](payments-table.md) — payments table uses `submittedAt` not `createdAt`; use submittedAt for ordering/export.
 - [Quiz session shape](quiz-session.md) — QuizSession requires `consecutiveCorrect: number`; always include it when constructing a new quiz session object.
+- [DB lib rebuild requirement](db-lib-rebuild.md) — after adding new columns/tables to lib/db schema, run `pnpm run typecheck:libs` before leaf typecheck; otherwise TS won't see new exports.
+- [Live tests participants field](live-tests-schema.md) — liveTestsTable.participants is JSONB number[], no separate participants table exists; use array ops not a join.
+- [FormFields-in-render remount bug](react-formfields-remount.md) — defining a component (FormFields) inside a render function causes it to remount on every keystroke; always use inline JSX function (renderFormFields()) instead.

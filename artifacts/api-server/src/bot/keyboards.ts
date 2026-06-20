@@ -52,6 +52,13 @@ export function scorecardKeyboard(testId: string): InlineKeyboard {
     .text("🔄 Re-Attempt", `reattempt_${testId}`).text("📊 My Attempts", `my_attempts_${testId}`);
 }
 
+export function reattemptChoiceKeyboard(testId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("🚀 Start Now", `begin_test_${testId}`).row()
+    .text("📊 My Attempts", `my_attempts_${testId}`).row()
+    .text("⬅️ Back to Tests", "go_test_series");
+}
+
 export function paymentKeyboard(testId: string, priceInr: number, priceInStars: number): InlineKeyboard {
   return new InlineKeyboard()
     .text(`⭐ Pay ${priceInStars} Stars`, `pay_stars_${testId}`).row()
@@ -76,11 +83,15 @@ export function testDetailWithStartKeyboard(testId: string): InlineKeyboard {
     .text("📚 All Tests", "go_test_series");
 }
 
-export function timerSelectKeyboard(testId: string): InlineKeyboard {
-  return new InlineKeyboard()
+export function timerSelectKeyboard(testId: string, isPremium: boolean): InlineKeyboard {
+  const kb = new InlineKeyboard()
     .text("15s ⚡", `timer_sel_${testId}_15`).text("30s 🕐", `timer_sel_${testId}_30`).text("45s 🕐", `timer_sel_${testId}_45`).row()
-    .text("60s 🐢", `timer_sel_${testId}_60`).text("90s 🦥", `timer_sel_${testId}_90`).row()
-    .text("❌ Cancel", "go_test_series");
+    .text("60s 🐢", `timer_sel_${testId}_60`).text("90s 🦥", `timer_sel_${testId}_90`);
+  if (isPremium) {
+    kb.row().text("♾️ No Time Limit", `timer_sel_${testId}_0`);
+  }
+  kb.row().text("❌ Cancel", "go_test_series");
+  return kb;
 }
 
 export function attemptsKeyboard(testId: string, attemptIds: number[]): InlineKeyboard {
@@ -96,4 +107,16 @@ export function attemptsKeyboard(testId: string, attemptIds: number[]): InlineKe
 export function liveTestJoinKeyboard(liveTestId: number): InlineKeyboard {
   return new InlineKeyboard()
     .text("✋ Join Live Test", `live_join_${liveTestId}`);
+}
+
+export function couponChoiceKeyboard(testId: string | undefined, isPremium: boolean): InlineKeyboard {
+  const prefix = testId ? `testid_${testId}` : "premium";
+  return new InlineKeyboard()
+    .text("🏷️ Yes, I have a coupon", `coupon_yes_${prefix}`).row()
+    .text("✅ No, proceed to payment", `coupon_no_${prefix}`);
+}
+
+export function skipQuestionKeyboard(msgId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("⏭️ Skip Question", `skip_q_${msgId}`);
 }

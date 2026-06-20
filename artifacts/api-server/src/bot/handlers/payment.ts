@@ -1,4 +1,5 @@
 import type { Bot } from "grammy";
+import { InlineKeyboard } from "grammy";
 import { db } from "@workspace/db";
 import {
   paymentsTable,
@@ -6,8 +7,9 @@ import {
   testSeriesTable,
   purchasedTestsTable,
   flashSalesTable,
+  couponCodesTable,
 } from "@workspace/db";
-import { eq, and, lte, gte } from "drizzle-orm";
+import { eq, and, lte, gte, sql } from "drizzle-orm";
 import { getSession, updateSession } from "../session.js";
 import { getConfig } from "./helpers.js";
 import { logger } from "../../lib/logger.js";
@@ -41,6 +43,29 @@ async function getEffectivePrice(testId: string, priceInr: number, priceInStars:
   return { inr: priceInr, stars: priceInStars, isOnSale: false };
 }
 
+async function validateCoupon(code: string): Promise<typeof couponCodesTable.$inferSelect | null> {
+  const [coupon] = await db.select().from(couponCodesTable)
+    .where(and(
+      eq(couponCodesTable.code, code.toUpperCase().trim()),
+      eq(couponCodesTable.isActive, true),
+    ))
+    .limit(1);
+  if (!coupon) return null;
+  if (coupon.usedCount >= coupon.usageLimit) return null;
+  if (coupon.expiresAt && coupon.expiresAt < new Date()) return null;
+  return coupon;
+}
+
+function applyDiscount(amount: number, coupon: typeof couponCodesTable.$inferSelect): number {
+  let discounted = amount;
+  if (coupon.discountPct > 0) {
+    discounted = Math.round(amount * (1 - coupon.discountPct / 100));
+  } else if (coupon.discountInr > 0) {
+    discounted = Math.max(1, amount - coupon.discountInr);
+  }
+  return discounted;
+}
+
 function scheduleCartAbandonment(bot: Bot, userId: number, amount: number, testId?: string): ReturnType<typeof setTimeout> {
   return setTimeout(async () => {
     const session = getSession(userId);
@@ -61,6 +86,37 @@ function scheduleCartAbandonment(bot: Bot, userId: number, amount: number, testI
   }, 3 * 60 * 1000);
 }
 
+async function sendUpiPaymentDetails(bot: Bot, userId: number, inr: number, testId: string | undefined, isPremium: boolean, testName: string, couponCode?: string): Promise<void> {
+  const adminUpi = await getAdminUpi();
+  const cartTimer = scheduleCartAbandonment(bot, userId, inr, testId);
+  updateSession(userId, {
+    pendingUpiPayment: { testId, isPremium, amount: inr, couponCode, cartAbandonTimer: cartTimer },
+    pendingCoupon: undefined,
+    awaitingCouponInput: false,
+  });
+
+  const couponNote = couponCode ? `\n🏷️ Coupon: *${escMd(couponCode)}* applied ✅\n` : "";
+  const itemLabel = isPremium ? "💎 Plan: *30 Days Premium Access*" : `📦 Test: *${escMd(testName)}*`;
+  const noteField = isPremium ? `Premium\\_${userId}` : `User\\_${userId}\\_Test\\_${escMd(testId ?? "")}`;
+
+  await bot.api.sendMessage(
+    userId,
+    `💳 *PAY VIA UPI*\n\n` +
+    `${itemLabel}\n` +
+    `💰 Amount: *₹${inr}*\n` +
+    couponNote +
+    `\n🏦 UPI ID: \`${escMd(adminUpi)}\`\n\n` +
+    `*Steps:*\n` +
+    `1\\. Open PhonePe / GPay / Paytm\n` +
+    `2\\. Send *₹${inr}* to: \`${escMd(adminUpi)}\`\n` +
+    `3\\. Note/Remark: \`${noteField}\`\n` +
+    `4\\. Take a screenshot showing UTR/Transaction ID\n` +
+    `5\\. Send that screenshot *in this chat*\n\n` +
+    `⚠️ Will be unlocked after admin verification\\.`,
+    { parse_mode: "MarkdownV2" }
+  );
+}
+
 export function registerPaymentHandlers(bot: Bot): void {
   bot.callbackQuery(/^pay_upi_/, async (ctx) => {
     await ctx.answerCallbackQuery();
@@ -74,25 +130,20 @@ export function registerPaymentHandlers(bot: Bot): void {
 
     const userId = ctx.from.id;
     const { inr, isOnSale } = await getEffectivePrice(testId, test.priceInr, test.priceInStars);
-    const saleTag = isOnSale ? " 🔥 *SALE PRICE*" : "";
-    const adminUpi = await getAdminUpi();
+    const saleTag = isOnSale ? " 🔥 *SALE*" : "";
 
-    const cartTimer = scheduleCartAbandonment(bot, userId, inr, testId);
-    updateSession(userId, { pendingUpiPayment: { testId, isPremium: false, amount: inr, cartAbandonTimer: cartTimer } });
+    updateSession(userId, {
+      pendingCoupon: { testId, isPremium: false, originalInr: inr, originalStars: test.priceInStars },
+      awaitingCouponInput: false,
+    });
 
+    const { couponChoiceKeyboard } = await import("../keyboards.js");
     await ctx.reply(
       `💳 *PAY VIA UPI*${saleTag}\n\n` +
       `📦 Test: *${escMd(test.testName)}*\n` +
       `💰 Amount: *₹${inr}*\n\n` +
-      `🏦 UPI ID: \`${escMd(adminUpi)}\`\n\n` +
-      `*Steps:*\n` +
-      `1\\. Open PhonePe / GPay / Paytm\n` +
-      `2\\. Send *₹${inr}* to: \`${escMd(adminUpi)}\`\n` +
-      `3\\. Note/Remark: \`User\\_${userId}\\_Test\\_${escMd(testId)}\`\n` +
-      `4\\. Take a screenshot showing UTR/Transaction ID\n` +
-      `5\\. Send that screenshot *in this chat*\n\n` +
-      `⚠️ Your test will be unlocked after admin verification\\.`,
-      { parse_mode: "MarkdownV2" }
+      `🏷️ Do you have a coupon code?`,
+      { parse_mode: "MarkdownV2", reply_markup: couponChoiceKeyboard(testId, false) }
     );
   });
 
@@ -122,7 +173,7 @@ export function registerPaymentHandlers(bot: Bot): void {
       logger.error({ err }, "Stars invoice error");
       const adminUpi = await getAdminUpi();
       await ctx.reply(
-        `⚠️ *Telegram Stars payment failed\\.*\n\nPossible reasons:\n• Stars payments not enabled for this bot \\(enable via BotFather → Payments\\)\n• Invalid price configuration\n\nPlease use UPI payment instead\\.\nUPI ID: \`${escMd(adminUpi)}\``,
+        `⚠️ *Telegram Stars payment failed\\.*\n\nPlease use UPI payment instead\\.\nUPI ID: \`${escMd(adminUpi)}\``,
         { parse_mode: "MarkdownV2" }
       );
     }
@@ -131,22 +182,50 @@ export function registerPaymentHandlers(bot: Bot): void {
   bot.callbackQuery("premium_upi", async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = ctx.from.id;
-    const adminUpi = await getAdminUpi();
-    const cartTimer = scheduleCartAbandonment(bot, userId, 199);
-    updateSession(userId, { pendingUpiPayment: { isPremium: true, amount: 199, cartAbandonTimer: cartTimer } });
+    updateSession(userId, {
+      pendingCoupon: { testId: undefined, isPremium: true, originalInr: 199, originalStars: 500 },
+      awaitingCouponInput: false,
+    });
 
+    const { couponChoiceKeyboard } = await import("../keyboards.js");
     await ctx.reply(
       `💳 *PAY VIA UPI — PREMIUM UPGRADE*\n\n` +
       `💎 Plan: *30 Days Premium Access*\n` +
       `💰 Amount: *₹199*\n\n` +
-      `🏦 UPI ID: \`${escMd(adminUpi)}\`\n\n` +
-      `*Steps:*\n` +
-      `1\\. Open PhonePe / GPay / Paytm\n` +
-      `2\\. Send *₹199* to: \`${escMd(adminUpi)}\`\n` +
-      `3\\. Note/Remark: \`Premium\\_${userId}\`\n` +
-      `4\\. Take a clear screenshot showing UTR/Transaction ID\n` +
-      `5\\. Send that screenshot *in this chat*\n\n` +
-      `⚠️ Premium will be activated after admin verifies your payment\\.`,
+      `🏷️ Do you have a coupon code?`,
+      { parse_mode: "MarkdownV2", reply_markup: couponChoiceKeyboard(undefined, true) }
+    );
+  });
+
+  bot.callbackQuery(/^coupon_no_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const userId = ctx.from.id;
+    const session = getSession(userId);
+    const pending = session.pendingCoupon;
+    if (!pending) { await ctx.reply("❌ Session expired. Please try again."); return; }
+
+    try { await ctx.deleteMessage(); } catch (_) {}
+
+    let testName = "Premium Upgrade";
+    if (pending.testId) {
+      const [t] = await db.select({ testName: testSeriesTable.testName }).from(testSeriesTable).where(eq(testSeriesTable.testId, pending.testId)).limit(1);
+      testName = t?.testName ?? pending.testId;
+    }
+
+    await sendUpiPaymentDetails(bot, userId, pending.originalInr, pending.testId, pending.isPremium, testName);
+  });
+
+  bot.callbackQuery(/^coupon_yes_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const userId = ctx.from.id;
+    const session = getSession(userId);
+    if (!session.pendingCoupon) { await ctx.reply("❌ Session expired. Please try again."); return; }
+
+    updateSession(userId, { awaitingCouponInput: true });
+    try { await ctx.deleteMessage(); } catch (_) {}
+
+    await bot.api.sendMessage(userId,
+      `🏷️ *Enter Your Coupon Code*\n\nType your coupon code below and send it:`,
       { parse_mode: "MarkdownV2" }
     );
   });
@@ -216,6 +295,50 @@ export function registerPaymentHandlers(bot: Bot): void {
     }
   });
 
+  bot.on("message:text", async (ctx, next) => {
+    const userId = ctx.from!.id;
+    const session = getSession(userId);
+    if (!session.awaitingCouponInput || !session.pendingCoupon) return next();
+
+    const code = ctx.message.text.trim().toUpperCase();
+    const pending = session.pendingCoupon;
+    const coupon = await validateCoupon(code);
+
+    if (!coupon) {
+      await ctx.reply(
+        `❌ *Invalid Coupon Code*\n\nThe code \`${escMd(code)}\` is either invalid, expired, or already used\\.\n\nProceed without coupon or try a different code\\.`,
+        {
+          parse_mode: "MarkdownV2",
+          reply_markup: new InlineKeyboard()
+            .text("🔄 Try Different Code", `coupon_yes_${pending.testId ? `testid_${pending.testId}` : "premium"}`).row()
+            .text("✅ Proceed Without Coupon", `coupon_no_${pending.testId ? `testid_${pending.testId}` : "premium"}`),
+        }
+      );
+      return;
+    }
+
+    const discountedInr = applyDiscount(pending.originalInr, coupon);
+    await db.update(couponCodesTable)
+      .set({ usedCount: sql`${couponCodesTable.usedCount} + 1` })
+      .where(eq(couponCodesTable.code, coupon.code));
+
+    updateSession(userId, { awaitingCouponInput: false });
+
+    let testName = "Premium Upgrade";
+    if (pending.testId) {
+      const [t] = await db.select({ testName: testSeriesTable.testName }).from(testSeriesTable).where(eq(testSeriesTable.testId, pending.testId)).limit(1);
+      testName = t?.testName ?? pending.testId;
+    }
+
+    const savedAmount = pending.originalInr - discountedInr;
+    await ctx.reply(
+      `✅ *Coupon Applied\\!*\n\n🏷️ Code: \`${escMd(coupon.code)}\`\n💰 Original: ~~₹${pending.originalInr}~~\n🎉 You save: *₹${savedAmount}*\n💚 Final Amount: *₹${discountedInr}*`,
+      { parse_mode: "MarkdownV2" }
+    );
+
+    await sendUpiPaymentDetails(bot, userId, discountedInr, pending.testId, pending.isPremium, testName, coupon.code);
+  });
+
   bot.on("message:photo", async (ctx, next) => {
     const userId = ctx.from!.id;
     const session = getSession(userId);
@@ -229,6 +352,7 @@ export function registerPaymentHandlers(bot: Bot): void {
     const bestPhoto = photos[photos.length - 1]!;
 
     try {
+      const isPremiumUser = pending.isPremium;
       await db.insert(paymentsTable).values({
         paymentId: randomUUID(),
         userId,
@@ -241,8 +365,12 @@ export function registerPaymentHandlers(bot: Bot): void {
 
       updateSession(userId, { pendingUpiPayment: undefined });
 
+      const priorityNote = isPremiumUser ? "\n\n💎 *Priority Support:* Your premium request gets priority review\\!" : "";
       await ctx.reply(
-        `📥 *Screenshot Received\\!* ✅\n\nYour payment is under review\\.\n\nYour ${pending.isPremium ? "Premium tier" : "test"} will be unlocked automatically once the admin verifies your payment\\. This usually takes a few minutes\\.`,
+        `📥 *Screenshot Received\\!* ✅\n\nYour payment is under review\\.` +
+        `${pending.couponCode ? `\n🏷️ Coupon: *${escMd(pending.couponCode)}*` : ""}` +
+        `\n\nYour ${pending.isPremium ? "Premium tier" : "test"} will be unlocked automatically once the admin verifies your payment\\. This usually takes a few minutes\\.` +
+        priorityNote,
         { parse_mode: "MarkdownV2" }
       );
     } catch (err) {

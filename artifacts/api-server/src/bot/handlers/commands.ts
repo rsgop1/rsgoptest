@@ -9,11 +9,12 @@ import {
   flashSalesTable,
   reportsTable,
 } from "@workspace/db";
-import { eq, and, gte, lte } from "drizzle-orm";
+import { eq, and, gte, lte, sql } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
 import { getSession, updateSession, clearQuiz } from "../session.js";
 import { paymentKeyboard, premiumKeyboard, testDetailWithStartKeyboard, paymentKeyboard as pkb } from "../keyboards.js";
 import { sendNextQuestion, startQuizForUser } from "./quiz.js";
+import { getConfig } from "./helpers.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 
@@ -174,6 +175,7 @@ export function registerCommandHandlers(bot: Bot): void {
   });
 
   bot.command("doubt", async (ctx) => {
+    const userId = ctx.from!.id;
     const text = ctx.message?.text?.replace(/^\/doubt\s*/, "").trim();
 
     if (!text) {
@@ -184,9 +186,44 @@ export function registerCommandHandlers(bot: Bot): void {
       return;
     }
 
+    const [userRow] = await db.select({ tier: usersTable.tier, aiDoubtCount: usersTable.aiDoubtCount, aiDoubtDate: usersTable.aiDoubtDate })
+      .from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+
+    const isPremium = userRow?.tier === "Premium";
+    const MAX_FREE_DOUBTS = 3;
+
+    if (!isPremium) {
+      const today = new Date().toISOString().slice(0, 10);
+      const lastDate = userRow?.aiDoubtDate ?? "";
+      const usedToday = lastDate === today ? (userRow?.aiDoubtCount ?? 0) : 0;
+
+      if (usedToday >= MAX_FREE_DOUBTS) {
+        await ctx.reply(
+          `🤖 *Daily Doubt Limit Reached*\n\nFree users can ask *${MAX_FREE_DOUBTS} doubts per day*\\.\n\nYou've used all ${MAX_FREE_DOUBTS} doubts for today\\.  Come back tomorrow\\!\n\n💎 *Upgrade to Premium* for unlimited doubt solving:\n/premium`,
+          { parse_mode: "MarkdownV2" }
+        );
+        return;
+      }
+
+      const newCount = usedToday + 1;
+      await db.update(usersTable)
+        .set({ aiDoubtCount: newCount, aiDoubtDate: today })
+        .where(eq(usersTable.userId, userId))
+        .catch(() => {});
+    }
+
     const thinkMsg = await ctx.reply("🤔 Solving your doubt\\.\\.\\.", { parse_mode: "MarkdownV2" });
 
     try {
+      const aiEnabled = await getConfig("ai_enabled");
+      if (aiEnabled === "false") {
+        await ctx.api.editMessageText(ctx.chat.id, thinkMsg.message_id,
+          "🔧 AI Doubt Solver is temporarily offline for maintenance\\. Please try again later\\.",
+          { parse_mode: "MarkdownV2" }
+        );
+        return;
+      }
+
       const apiKey = process.env["OPENROUTER_API_KEY"] ?? process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
       const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"] ?? "https://openrouter.ai/api/v1";
 
@@ -197,6 +234,9 @@ export function registerCommandHandlers(bot: Bot): void {
         return;
       }
 
+      const customPrompt = await getConfig("doubt_prompt");
+      const systemPrompt = customPrompt || "You are a sharp educational AI for Indian competitive exam students (SSC, Railway, Banking, Bihar/State Govt). Answer the question directly and concisely. No filler words. No markdown symbols (no **, no __, no #). Max 120 words. Give the direct answer first, then 1-2 supporting facts if needed. End with one exam tip if relevant.";
+
       const resp = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -206,10 +246,7 @@ export function registerCommandHandlers(bot: Bot): void {
         body: JSON.stringify({
           model: "openai/gpt-oss-120b:free",
           messages: [
-            {
-              role: "system",
-              content: "You are a sharp educational AI for Indian competitive exam students (SSC, Railway, Banking, Bihar/State Govt). Answer the question directly and concisely. No filler words. No markdown symbols (no **, no __, no #). Max 120 words. Give the direct answer first, then 1-2 supporting facts if needed. End with one exam tip if relevant."
-            },
+            { role: "system", content: systemPrompt },
             { role: "user", content: text }
           ],
           max_tokens: 300,
@@ -224,11 +261,12 @@ export function registerCommandHandlers(bot: Bot): void {
       if (data.error) throw new Error(data.error.message);
 
       const answer = data.choices?.[0]?.message?.content ?? "Could not get an answer. Please try again.";
+      const limitNote = !isPremium ? `\n\n_Free doubts left today: ${MAX_FREE_DOUBTS - (userRow?.aiDoubtCount ?? 0)}_` : "";
 
       await ctx.api.editMessageText(
         ctx.chat.id,
         thinkMsg.message_id,
-        `🤖 *Doubt Solved*\n\n*Q:* ${escMd(text.slice(0, 120))}\n\n${escMd(answer)}`,
+        `🤖 *Doubt Solved*\n\n*Q:* ${escMd(text.slice(0, 120))}\n\n${escMd(answer)}${escMd(limitNote)}`,
         { parse_mode: "MarkdownV2" }
       );
     } catch (err) {

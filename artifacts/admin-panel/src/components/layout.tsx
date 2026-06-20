@@ -19,6 +19,7 @@ import {
   Terminal,
   Flag,
   Radio,
+  Brain,
 } from "lucide-react";
 import { ReactNode } from "react";
 
@@ -32,6 +33,7 @@ const navItems = [
   { href: "/reports", label: "Reports", icon: Flag },
   { href: "/live-tests", label: "Live Tests", icon: Radio },
   { href: "/users", label: "Users", icon: Users },
+  { href: "/ai", label: "AI & Coupons", icon: Brain },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/telemetry", label: "Live Terminal", icon: Terminal },
 ];
