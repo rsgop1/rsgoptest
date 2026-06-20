@@ -208,11 +208,11 @@ export function registerCommandHandlers(bot: Bot): void {
           messages: [
             {
               role: "system",
-              content: "You are a helpful educational AI for Indian competitive exam students (SSC, Railway, Banking, UPSC, State Govt Jobs). Answer doubts clearly and concisely in English. Keep responses under 250 words. Use simple formatting without markdown symbols."
+              content: "You are a sharp educational AI for Indian competitive exam students (SSC, Railway, Banking, Bihar/State Govt). Answer the question directly and concisely. No filler words. No markdown symbols (no **, no __, no #). Max 120 words. Give the direct answer first, then 1-2 supporting facts if needed. End with one exam tip if relevant."
             },
             { role: "user", content: text }
           ],
-          max_tokens: 500,
+          max_tokens: 300,
         }),
       });
 
@@ -228,7 +228,7 @@ export function registerCommandHandlers(bot: Bot): void {
       await ctx.api.editMessageText(
         ctx.chat.id,
         thinkMsg.message_id,
-        `🤖 *AI Doubt Solver*\n\n*Q:* ${escMd(text.slice(0, 100))}\n\n*Answer:*\n${escMd(answer)}`,
+        `🤖 *Doubt Solved*\n\n*Q:* ${escMd(text.slice(0, 120))}\n\n${escMd(answer)}`,
         { parse_mode: "MarkdownV2" }
       );
     } catch (err) {

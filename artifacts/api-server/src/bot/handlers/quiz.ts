@@ -506,57 +506,75 @@ export function registerQuizHandlers(bot: Bot): void {
     const userOptText = userAns !== null && userAns !== undefined ? (q.options[userAns] ?? "?") : "Skipped";
     const wrongOpts = q.options.filter((_, i) => i !== q.correctOptionIndex);
 
-    const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"];
-    const apiKey = process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
+    const apiKey = process.env["OPENROUTER_API_KEY"] ?? process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
+    const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"] ?? "https://openrouter.ai/api/v1";
 
-    if (!baseUrl || !apiKey) {
+    if (!apiKey) {
       await ctx.reply("❌ AI service not configured. Ask admin to add OpenRouter API key.");
       return;
     }
 
-    const thinkMsg = await ctx.reply("🤖 *AI Info — Analyzing question…*", { parse_mode: "MarkdownV2" });
+    const thinkMsg = await ctx.reply("🤖 *AI analyzing…*", { parse_mode: "MarkdownV2" });
 
     try {
-      const prompt = `You are an expert educational AI for Indian competitive exams (SSC, Railway, Banking, Bihar Govt exams).
+      const difficulty = q.difficulty ?? "medium";
+      const wrongOptsText = q.options
+        .map((o, i) => i !== q.correctOptionIndex ? `• ${o}` : null)
+        .filter(Boolean)
+        .join("\n");
 
-Analyze this MCQ question:
-Category: ${session.solution.testName}
+      const prompt = `You are an expert AI tutor for Indian competitive exams (SSC, Railway, Banking, Bihar Govt).
+
+Question from: ${session.solution.testName}
+Difficulty: ${difficulty}
 Question: ${q.question}
-Options: ${q.options.map((o, i) => `${i + 1}. ${o}`).join(" | ")}
+Options: ${q.options.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`).join(" | ")}
 Correct Answer: ${correctOpt}
-User's Answer: ${userOptText}
-Explanation given: ${q.explanation || "None"}
+Explanation: ${q.explanation || "None provided"}
 
-Give a structured response in this exact format:
-✅ CORRECT ANSWER: [option text]
-📝 WHY CORRECT: [2-3 sentences explaining why this is correct, with exam-relevant facts]
-❌ WHY OTHER OPTIONS ARE WRONG:
-• [Option A]: [one-liner reason]
-• [Option B]: [one-liner reason]
-(only wrong options)
-💡 EXAM TIP: [one exam-relevant tip about this topic]
+Write a structured response in EXACTLY this format (no markdown symbols like *, _, etc.):
 
-Keep it concise, clear, in English. Max 200 words total.`;
+✅ Correct Answer: ${correctOpt}
+
+📝 Why Correct:
+[2-3 clear sentences. Explain why this is right. Include 1 exam-relevant fact tied to the category.]
+
+📌 Exam Point:
+[One sharp exam tip or fact related to this topic that students must know for ${session.solution.testName}.]
+
+❌ Why Wrong Options Fail:
+${wrongOptsText}
+[For each wrong option above, write exactly ONE line: "Option text — reason it's wrong or a quick one-liner exam fact"]
+
+Keep total response under 180 words. Plain English only. No bullet symbols except the ones shown.`;
 
       const resp = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
         body: JSON.stringify({
           model: "deepseek/deepseek-r1-0528-qwen3-8b:free",
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 500,
+          messages: [
+            { role: "system", content: "You are a concise educational AI for Indian competitive exam students. Always respond in plain English with no markdown formatting symbols." },
+            { role: "user", content: prompt }
+          ],
+          max_tokens: 600,
         }),
       });
 
       const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message: string } };
       if (data.error) throw new Error(data.error.message);
 
-      const answer = data.choices?.[0]?.message?.content ?? "Could not get analysis.";
-      const cleanAnswer = answer.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
+      const rawAnswer = data.choices?.[0]?.message?.content ?? "Could not get analysis.";
+      const cleanAnswer = rawAnswer.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
+
+      const statusIcon = userAns === null || userAns === undefined ? "⏭️" : userAns === q.correctOptionIndex ? "✅" : "❌";
+      const userAnswerLine = userAns === null || userAns === undefined
+        ? "You skipped this question"
+        : `You answered: ${userOptText}`;
 
       const chatId = ctx.chat?.id ?? ctx.from.id;
       await ctx.api.editMessageText(chatId, thinkMsg.message_id,
-        `🤖 *AI Info — Q${qIdx + 1}*\n\n${cleanAnswer}`,
+        `🤖 *AI Info — Q${qIdx + 1}*\n${statusIcon} _${escMd(userAnswerLine)}_\n\n${cleanAnswer}`,
         { parse_mode: "MarkdownV2" }
       );
     } catch (err) {
