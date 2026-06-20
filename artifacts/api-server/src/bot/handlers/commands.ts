@@ -187,10 +187,10 @@ export function registerCommandHandlers(bot: Bot): void {
     const thinkMsg = await ctx.reply("🤔 Solving your doubt\\.\\.\\.", { parse_mode: "MarkdownV2" });
 
     try {
-      const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"];
-      const apiKey = process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
+      const apiKey = process.env["OPENROUTER_API_KEY"] ?? process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
+      const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"] ?? "https://openrouter.ai/api/v1";
 
-      if (!baseUrl || !apiKey) {
+      if (!apiKey) {
         await ctx.api.editMessageText(ctx.chat.id, thinkMsg.message_id,
           "❌ AI service not configured yet. Please try again later."
         );
