@@ -150,8 +150,25 @@ export function registerCommandHandlers(bot: Bot): void {
   });
 
   bot.command("premium", async (ctx) => {
+    const userId = ctx.from!.id;
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+
+    if (user?.tier === "Premium" && user.premiumExpiry && user.premiumExpiry > new Date()) {
+      const expDate = user.premiumExpiry.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+      const daysLeft = Math.ceil((user.premiumExpiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      await ctx.reply(
+        `💎 *You're Already Premium\\!*\n\n` +
+        `✅ Status: *Active*\n` +
+        `📅 Valid till: *${escMd(expDate)}*\n` +
+        `⏳ Days remaining: *${daysLeft} day${daysLeft !== 1 ? "s" : ""}*\n\n` +
+        `_Want more days? Tap Renew below to extend your Premium\\._`,
+        { parse_mode: "MarkdownV2", reply_markup: premiumKeyboard() }
+      );
+      return;
+    }
+
     await ctx.reply(
-      `💎 *Series TestPro Premium*\n\n*What you get:*\n✅ All mock tests unlocked\n✅ AI Info for every question\n✅ Detailed solutions for every question\n✅ Global rank & performance analytics\n✅ Wrong question notebook\n✅ Flash sale early access\n✅ No ads before tests\n✅ *Custom timer* \\(15s–90s per question\\)\n\n💰 *Plan:* 30 Days Premium\n💲 ₹199 \\| ⭐ 500 Telegram Stars\n\nChoose your payment method:`,
+      `💎 *Series TestPro Premium*\n\n*What you get:*\n✅ All mock tests unlocked\n✅ AI Info for every question\n✅ No ads before tests\n✅ *Custom timer* \\(30s–120s per question\\)\n✅ Global rank & performance analytics\n✅ Wrong question notebook\n✅ Flash sale early access\n\n💰 *Plan:* 30 Days Premium\n💲 ₹199 \\| ⭐ 500 Telegram Stars\n\nChoose your payment method:`,
       { parse_mode: "MarkdownV2", reply_markup: premiumKeyboard() }
     );
   });

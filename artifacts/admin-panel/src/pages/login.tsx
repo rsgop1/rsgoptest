@@ -15,7 +15,7 @@ export default function Login() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: user } = useAdminGetMe({ query: { retry: false } });
+  const { data: user } = useAdminGetMe();
 
   if (user?.authenticated) {
     setLocation("/dashboard");

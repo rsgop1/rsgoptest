@@ -124,7 +124,7 @@ export async function trySetGroupTitles(userId: number): Promise<void> {
           can_post_messages: false,
           can_edit_messages: false,
           can_delete_messages: false,
-          can_invite_users: false,
+          can_invite_users: true,
           can_restrict_members: false,
           can_pin_messages: false,
           can_promote_members: false,

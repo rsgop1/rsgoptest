@@ -775,6 +775,10 @@ router.post("/live-tests", requireAuth, async (req: Request, res: Response) => {
     }).returning();
 
     emitTelemetry(`Live test scheduled: "${title}" at ${scheduledAt}`);
+
+    const { announceLiveTest } = await import("../bot/handlers/live-test.js");
+    announceLiveTest(inserted!.id).catch(err => logger.warn({ err }, "Could not auto-announce live test"));
+
     res.status(201).json({
       ...inserted,
       scheduledAt: inserted!.scheduledAt.toISOString(),
@@ -852,6 +856,116 @@ router.get("/achievements", requireAuth, async (_req: Request, res: Response) =>
     res.json(rows.map((r) => ({ ...r, awardedAt: r.awardedAt.toISOString() })));
   } catch (err) {
     res.status(500).json({ error: "Failed to load achievements" });
+  }
+});
+
+// ── EXPORT ALL (JSON full backup) ──────────────────────────────────────────
+router.get("/export/all", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const [users, tests, payments, history, achievements, configs] = await Promise.all([
+      db.select().from(usersTable),
+      db.select().from(testSeriesTable),
+      db.select().from(paymentsTable),
+      db.select().from(userHistoryTable).limit(20000),
+      db.select().from(achievementsTable),
+      db.select().from(globalConfigTable),
+    ]);
+
+    const data = {
+      exportedAt: new Date().toISOString(),
+      version: "1.0",
+      users,
+      tests,
+      payments,
+      history,
+      achievements,
+      configs,
+    };
+
+    const date = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Content-Disposition", `attachment; filename=series-testpro-backup-${date}.json`);
+    res.json(data);
+  } catch (err) {
+    logger.error({ err }, "Export all failed");
+    res.status(500).json({ error: "Failed to export data" });
+  }
+});
+
+// ── IMPORT ALL (JSON restore) ───────────────────────────────────────────────
+router.post("/import/all", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const data = req.body as {
+      version?: string;
+      configs?: Array<{ key: string; value: string }>;
+      users?: Array<Record<string, unknown>>;
+      tests?: Array<Record<string, unknown>>;
+      payments?: Array<Record<string, unknown>>;
+      achievements?: Array<Record<string, unknown>>;
+    };
+
+    let imported = { configs: 0, users: 0, tests: 0, payments: 0, achievements: 0 };
+
+    if (data.configs?.length) {
+      for (const cfg of data.configs) {
+        await db.insert(globalConfigTable).values({ key: cfg.key, value: cfg.value })
+          .onConflictDoUpdate({ target: globalConfigTable.key, set: { value: cfg.value } })
+          .catch(() => {});
+      }
+      imported.configs = data.configs.length;
+    }
+
+    if (data.users?.length) {
+      for (const u of data.users) {
+        const { id: _id, joinedAt, premiumExpiry, ...rest } = u as any;
+        await db.insert(usersTable).values({
+          ...rest,
+          joinedAt: joinedAt ? new Date(joinedAt) : new Date(),
+          premiumExpiry: premiumExpiry ? new Date(premiumExpiry) : null,
+        }).onConflictDoNothing().catch(() => {});
+      }
+      imported.users = data.users.length;
+    }
+
+    if (data.tests?.length) {
+      for (const t of data.tests) {
+        const { id: _id, createdAt, updatedAt, ...rest } = t as any;
+        await db.insert(testSeriesTable).values({
+          ...rest,
+          createdAt: createdAt ? new Date(createdAt) : new Date(),
+          updatedAt: updatedAt ? new Date(updatedAt) : new Date(),
+        }).onConflictDoNothing().catch(() => {});
+      }
+      imported.tests = data.tests.length;
+    }
+
+    if (data.payments?.length) {
+      for (const p of data.payments) {
+        const { id: _id, submittedAt, ...rest } = p as any;
+        await db.insert(paymentsTable).values({
+          ...rest,
+          submittedAt: submittedAt ? new Date(submittedAt) : new Date(),
+        }).onConflictDoNothing().catch(() => {});
+      }
+      imported.payments = data.payments.length;
+    }
+
+    if (data.achievements?.length) {
+      for (const a of data.achievements) {
+        const { id: _id, awardedAt, ...rest } = a as any;
+        await db.insert(achievementsTable).values({
+          ...rest,
+          awardedAt: awardedAt ? new Date(awardedAt) : new Date(),
+        }).onConflictDoNothing().catch(() => {});
+      }
+      imported.achievements = data.achievements.length;
+    }
+
+    emitTelemetry(`Data import completed: ${JSON.stringify(imported)}`);
+    res.json({ success: true, imported });
+  } catch (err) {
+    logger.error({ err }, "Import all failed");
+    res.status(500).json({ error: "Failed to import data" });
   }
 });
 

@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { db } from "@workspace/db";
-import { usersTable, testSeriesTable, purchasedTestsTable } from "@workspace/db";
+import { usersTable, testSeriesTable, purchasedTestsTable, liveTestsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import {
   mainCategoryKeyboard,
@@ -56,11 +56,14 @@ async function upsertUser(
 ): Promise<boolean> {
   const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
   if (existing.length === 0) {
+    const trialExpiry = new Date();
+    trialExpiry.setDate(trialExpiry.getDate() + 1);
     await db.insert(usersTable).values({
       userId,
       username: username ?? null,
       fullName: `${firstName}${lastName ? " " + lastName : ""}`,
-      tier: "Free",
+      tier: "Premium",
+      premiumExpiry: trialExpiry,
       referredBy: referredBy ?? null,
     });
     if (referredBy) {
@@ -113,6 +116,30 @@ export function registerStartHandlers(bot: Bot): void {
         const challengeId = param.replace("challenge_", "");
         await upsertUser(from.id, from.first_name, from.last_name, from.username);
         await handleChallengeStart(bot, from.id, challengeId);
+        return;
+      }
+
+      if (param.startsWith("livetestjoin_")) {
+        const liveTestId = parseInt(param.replace("livetestjoin_", ""), 10);
+        await upsertUser(from.id, from.first_name, from.last_name, from.username);
+        if (isNaN(liveTestId)) { await ctx.reply("❌ Invalid live test link."); return; }
+        const [liveTest] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, liveTestId)).limit(1);
+        if (!liveTest) { await ctx.reply("❌ Live test not found."); return; }
+        if (liveTest.status === "completed") { await ctx.reply("❌ This live test has already ended."); return; }
+        if (liveTest.status === "live") { await ctx.reply("⚠️ This live test has already started!"); return; }
+        const participants = (liveTest.participants ?? []) as number[];
+        if (participants.includes(from.id)) {
+          const schedTime = new Date(liveTest.scheduledAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+          await ctx.reply(`✅ You're already registered!\n\n📝 *${escMd(liveTest.title)}*\n⏰ Starts: *${escMd(schedTime)} IST*`, { parse_mode: "MarkdownV2" });
+          return;
+        }
+        participants.push(from.id);
+        await db.update(liveTestsTable).set({ participants }).where(eq(liveTestsTable.id, liveTestId));
+        const schedTime = new Date(liveTest.scheduledAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+        await ctx.reply(
+          `✅ *Joined Live Test\\!*\n\n📝 *${escMd(liveTest.title)}*\n⏰ Starts: *${escMd(schedTime)} IST*\n\n_Questions will be sent to your DM automatically when the test begins\\. Stay tuned\\!_ 🎯`,
+          { parse_mode: "MarkdownV2" }
+        );
         return;
       }
 
@@ -207,6 +234,10 @@ export function registerStartHandlers(bot: Bot): void {
           await ctx.reply(`🎉 You joined via a referral link\\!\n\nWelcome to *Series TestPro\\!*`, { parse_mode: "MarkdownV2" });
         }
         await ctx.reply(WELCOME_MSG, { parse_mode: "MarkdownV2", reply_markup: mainCategoryKeyboard() });
+        await ctx.reply(
+          `🎁 *1\\-Day Premium Trial Activated\\!*\n\nWelcome gift from Series TestPro 🎉\n\n✅ All tests unlocked for 24 hours\n✅ AI Info enabled\n✅ No ads\n✅ Custom timer\n\n_Trial expires in 24 hours\\. Use /premium to keep access\\._`,
+          { parse_mode: "MarkdownV2" }
+        );
       } else {
         const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, from.id)).limit(1);
         const sub = user?.targetExamSub ?? "Not set";

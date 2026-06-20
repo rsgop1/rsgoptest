@@ -1,8 +1,7 @@
 import type { Bot } from "grammy";
-import { InlineKeyboard } from "grammy";
 import { db } from "@workspace/db";
 import { usersTable, anonDoubtsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { getSession, updateSession } from "../session.js";
 import { getApi } from "../api-instance.js";
 import { getConfig } from "./helpers.js";
@@ -11,8 +10,6 @@ import { logger } from "../../lib/logger.js";
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
 }
-
-const anonDoubtMap = new Map<number, number>();
 
 export function registerAnonDoubtHandlers(bot: Bot): void {
   bot.command("anon", async (ctx) => {
@@ -74,28 +71,24 @@ export function registerAnonDoubtHandlers(bot: Bot): void {
 
     try {
       const groupId = isNaN(Number(groupIdRaw)) ? groupIdRaw : Number(groupIdRaw);
-      const replyKb = new InlineKeyboard().text("💡 I know the answer! (Reply in group)", "anon_noop");
 
       const postedMsg = await api.sendMessage(
         groupId as number,
-        `🕵️ *Anonymous Student asks:*\n\n"${escMd(doubtText)}"\n\n_Reply to this message to help them\\!_`,
-        { parse_mode: "MarkdownV2", reply_markup: replyKb }
+        `🕵️ *Anonymous Student asks:*\n\n_"${escMd(doubtText)}"_\n\n💡 _Reply to this message if you know the answer\\!_`,
+        { parse_mode: "MarkdownV2" }
       );
 
       try {
         await api.pinChatMessage(groupId as number, postedMsg.message_id, { disable_notification: true });
       } catch { }
 
-      const [inserted] = await db.insert(anonDoubtsTable).values({
+      await db.insert(anonDoubtsTable).values({
         userId,
         doubtText,
         groupMessageId: postedMsg.message_id,
         groupChatId: Number(groupId),
-      }).returning();
-
-      if (inserted) {
-        anonDoubtMap.set(postedMsg.message_id, inserted.id);
-      }
+        status: "open",
+      });
 
       await db.update(usersTable).set({
         anonDoubtsUsed: usedToday + 1,
@@ -103,7 +96,7 @@ export function registerAnonDoubtHandlers(bot: Bot): void {
       }).where(eq(usersTable.userId, userId));
 
       await ctx.reply(
-        `✅ *Doubt Posted Anonymously\\!*\n\nYour question has been posted in the study group\\.\n\nYou'll get a notification when someone answers\\.\n\n📊 Remaining today: *${2 - usedToday}/3*`,
+        `✅ *Doubt Posted Anonymously\\!*\n\nYour question is now in the study group\\.\n\n🔔 You'll be notified *only when a real person replies* to your doubt — with a direct link\\.\n\n📊 Remaining today: *${2 - usedToday}/3*`,
         { parse_mode: "MarkdownV2" }
       );
     } catch (err) {
@@ -115,23 +108,32 @@ export function registerAnonDoubtHandlers(bot: Bot): void {
   bot.on("message", async (ctx, next) => {
     try {
       const msg = ctx.message;
-      if (!msg || !msg.reply_to_message) return next();
+      if (!msg?.reply_to_message) return next();
 
+      const chatType = ctx.chat?.type;
+      if (chatType !== "group" && chatType !== "supergroup") return next();
+
+      if (ctx.from?.is_bot) return next();
+
+      const chatId = ctx.chat!.id;
       const repliedMsgId = msg.reply_to_message.message_id;
-      const doubtRecordId = anonDoubtMap.get(repliedMsgId);
-      if (!doubtRecordId) return next();
 
-      const [doubt] = await db.select().from(anonDoubtsTable).where(eq(anonDoubtsTable.id, doubtRecordId)).limit(1);
+      const [doubt] = await db.select().from(anonDoubtsTable).where(and(
+        eq(anonDoubtsTable.groupChatId, chatId),
+        eq(anonDoubtsTable.groupMessageId, repliedMsgId),
+      )).limit(1);
+
       if (!doubt || doubt.status === "resolved") return next();
 
-      await db.update(anonDoubtsTable).set({ status: "resolved" }).where(eq(anonDoubtsTable.id, doubtRecordId));
-      anonDoubtMap.delete(repliedMsgId);
+      await db.update(anonDoubtsTable).set({ status: "resolved" }).where(eq(anonDoubtsTable.id, doubt.id));
 
       const api = getApi();
-      const answererName = ctx.from?.first_name ?? "Someone";
+      const cleanChatId = String(chatId).replace(/^-100/, "");
+      const msgLink = `https://t.me/c/${cleanChatId}/${msg.message_id}`;
+
       await api.sendMessage(
         doubt.userId,
-        `🔔 *Someone answered your anonymous doubt\\!*\n\n_"${escMd(doubt.doubtText.slice(0, 100))}"_\n\n✅ *${escMd(answererName)}* replied in the study group\\. Check it out\\!`,
+        `🔔 *Someone answered your anonymous doubt\\!*\n\n_"${escMd(doubt.doubtText.slice(0, 100))}${doubt.doubtText.length > 100 ? "\\.\\.\\." : ""}"_\n\n👉 [View Answer in Group](${msgLink})`,
         { parse_mode: "MarkdownV2" }
       );
     } catch { }

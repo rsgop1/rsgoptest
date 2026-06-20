@@ -1,20 +1,234 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { db } from "@workspace/db";
-import { liveTestsTable, liveTestAnswersTable, testSeriesTable, usersTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
-import type { QuestionData } from "@workspace/db";
+import { liveTestsTable, testSeriesTable, usersTable, userHistoryTable } from "@workspace/db";
+import { eq, and, inArray, desc } from "drizzle-orm";
 import { getApi } from "../api-instance.js";
-import { getSession, updateSession } from "../session.js";
+import { startQuizForUser } from "./quiz.js";
+import { getConfig } from "./helpers.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
-import { liveTestJoinKeyboard } from "../keyboards.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
 }
 
-const activeLiveSessions = new Map<number, { pollIds: Map<number, string>; timers: Map<number, ReturnType<typeof setTimeout>> }>();
+function buildLeaderboard(entries: Array<{ fullName: string; score: number; correct: number; total: number }>): string {
+  const medals = ["🥇", "🥈", "🥉"];
+  if (!entries.length) return "_No participants completed the test_";
+  return entries.slice(0, 10).map((e, i) => {
+    const medal = medals[i] ?? `${i + 1}\\.`;
+    return `${medal} *${escMd(e.fullName)}* — *${e.score}* pts \\(${e.correct}/${e.total} correct\\)`;
+  }).join("\n");
+}
+
+async function resolveGroupId(liveTest: { groupChatId: number | null }): Promise<number | null> {
+  if (liveTest.groupChatId) return liveTest.groupChatId;
+  const configGroup = await getConfig("live_test_group") ?? await getConfig("anon_doubt_group");
+  return configGroup ? Number(configGroup) : null;
+}
+
+export async function announceLiveTest(liveTestId: number): Promise<void> {
+  const api = getApi();
+  const [liveTest] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, liveTestId)).limit(1);
+  if (!liveTest || liveTest.status !== "scheduled") return;
+
+  const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, liveTest.testId)).limit(1);
+  const groupId = await resolveGroupId(liveTest);
+  const schedTime = new Date(liveTest.scheduledAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+  const qCount = test && Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 0;
+
+  const joinKb = new InlineKeyboard().url(
+    "✅ Join Live Test",
+    `https://t.me/gt_testprobot?start=livetestjoin_${liveTestId}`
+  );
+
+  const msg =
+    `🔴 *LIVE MOCK TEST SCHEDULED\\!*\n\n` +
+    `📝 *${escMd(liveTest.title)}*\n` +
+    (test ? `📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n` : "") +
+    `📊 *${qCount}* Questions\n` +
+    `⏰ Starts: *${escMd(schedTime)} IST*\n\n` +
+    `👇 Tap below to join\\! Your questions will be sent to your DM automatically when the test begins\\.`;
+
+  let pinnedMsgId: number | null = null;
+  let finalGroupId: number | null = liveTest.groupChatId;
+
+  if (groupId) {
+    try {
+      const posted = await api.sendMessage(groupId, msg, { parse_mode: "MarkdownV2", reply_markup: joinKb });
+      pinnedMsgId = posted.message_id;
+      finalGroupId = groupId;
+      try { await api.pinChatMessage(groupId, posted.message_id, { disable_notification: false }); } catch { }
+    } catch (err) {
+      logger.warn({ err, groupId }, "Could not post live test announcement to group");
+    }
+  }
+
+  await db.update(liveTestsTable).set({
+    status: "announced",
+    groupChatId: finalGroupId,
+    pinnedMessageId: pinnedMsgId,
+  }).where(eq(liveTestsTable.id, liveTestId));
+
+  emitTelemetry(`Live test announced: ${liveTest.title}`);
+}
+
+export async function sendLiveTestReminder(liveTestId: number): Promise<void> {
+  const api = getApi();
+  const [liveTest] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, liveTestId)).limit(1);
+  if (!liveTest || liveTest.status !== "announced") return;
+
+  const schedTime = new Date(liveTest.scheduledAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+  const participants = (liveTest.participants ?? []) as number[];
+
+  const joinKb = new InlineKeyboard().url(
+    "✅ Join Now",
+    `https://t.me/gt_testprobot?start=livetestjoin_${liveTestId}`
+  );
+
+  const reminderMsg =
+    `⚡ *5 MINUTES TO GO\\!*\n\n` +
+    `📝 *${escMd(liveTest.title)}*\n` +
+    `⏰ Starts: *${escMd(schedTime)} IST*\n` +
+    `👥 *${participants.length}* participants registered\n\n` +
+    `Get ready\\! 💪`;
+
+  const channelId = await getConfig("live_test_channel") ?? await getConfig("leaderboard_channel");
+  if (channelId) {
+    try {
+      const chId = isNaN(Number(channelId)) ? channelId : Number(channelId);
+      await api.sendMessage(chId as number, reminderMsg, { parse_mode: "MarkdownV2", reply_markup: joinKb });
+    } catch (err) {
+      logger.warn({ err, channelId }, "Could not send 5-min reminder to channel");
+    }
+  }
+
+  if (liveTest.groupChatId) {
+    try {
+      await api.sendMessage(liveTest.groupChatId, reminderMsg, { parse_mode: "MarkdownV2", reply_markup: joinKb });
+    } catch (err) {
+      logger.warn({ err }, "Could not send 5-min reminder to group");
+    }
+  }
+
+  await db.update(liveTestsTable).set({ status: "notified" }).where(eq(liveTestsTable.id, liveTestId));
+}
+
+export async function startLiveTest(liveTestId: number): Promise<void> {
+  const api = getApi();
+  const [liveTest] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, liveTestId)).limit(1);
+  if (!liveTest || !["announced", "notified"].includes(liveTest.status)) return;
+
+  const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, liveTest.testId)).limit(1);
+  if (!test) {
+    await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, liveTestId));
+    return;
+  }
+
+  const participants = (liveTest.participants ?? []) as number[];
+  if (participants.length === 0) {
+    await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, liveTestId));
+    if (liveTest.groupChatId) {
+      try {
+        await api.sendMessage(
+          liveTest.groupChatId,
+          `📭 *Live Test Ended*\n\n📝 *${escMd(liveTest.title)}*\n\n_No one joined this session\\._`,
+          { parse_mode: "MarkdownV2" }
+        );
+      } catch { }
+    }
+    return;
+  }
+
+  await db.update(liveTestsTable).set({ status: "live" }).where(eq(liveTestsTable.id, liveTestId));
+
+  if (liveTest.groupChatId) {
+    try {
+      await api.sendMessage(
+        liveTest.groupChatId,
+        `🚀 *LIVE TEST STARTED\\!*\n\n📝 *${escMd(liveTest.title)}*\n👥 *${participants.length}* participants\n\n📱 _Check your DM with @gt\\_testprobot — questions are being sent\\!_\n\n🏆 _Leaderboard will be posted here when the test ends\\._`,
+        { parse_mode: "MarkdownV2" }
+      );
+    } catch { }
+  }
+
+  for (const userId of participants) {
+    try {
+      await startQuizForUser(userId, test, true);
+      await new Promise(r => setTimeout(r, 300));
+    } catch (err) {
+      logger.warn({ err, userId }, "Could not start live test quiz for participant");
+    }
+  }
+
+  emitTelemetry(`Live test started: ${liveTest.title} — ${participants.length} participants`);
+
+  const questions = test.questionsData as unknown[];
+  const timerSeconds = test.timerSeconds ?? 30;
+  const totalTime = (questions.length * timerSeconds + questions.length * 3 + 90) * 1000;
+
+  setTimeout(async () => {
+    await postLiveLeaderboard(liveTestId);
+  }, totalTime);
+}
+
+async function postLiveLeaderboard(liveTestId: number): Promise<void> {
+  const api = getApi();
+  const [liveTest] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, liveTestId)).limit(1);
+  if (!liveTest) return;
+
+  const participants = (liveTest.participants ?? []) as number[];
+  const groupId = liveTest.groupChatId;
+
+  const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, liveTest.testId)).limit(1);
+  const qCount = test && Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 1;
+
+  if (!groupId) {
+    await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, liveTestId));
+    return;
+  }
+
+  const userRows = participants.length > 0
+    ? await db.select({ userId: usersTable.userId, fullName: usersTable.fullName })
+        .from(usersTable)
+        .where(inArray(usersTable.userId, participants))
+    : [];
+
+  const nameMap = new Map(userRows.map(u => [u.userId, u.fullName]));
+
+  const entries: Array<{ fullName: string; score: number; correct: number; total: number }> = [];
+  for (const userId of participants) {
+    const [latest] = await db.select({ score: userHistoryTable.score, correctCount: userHistoryTable.correctCount })
+      .from(userHistoryTable)
+      .where(and(eq(userHistoryTable.userId, userId), eq(userHistoryTable.testId, liveTest.testId)))
+      .orderBy(desc(userHistoryTable.completedAt))
+      .limit(1);
+
+    entries.push({
+      fullName: nameMap.get(userId) ?? `User ${userId}`,
+      score: latest ? Math.round(latest.score) : 0,
+      correct: latest?.correctCount ?? 0,
+      total: qCount,
+    });
+  }
+
+  entries.sort((a, b) => b.score - a.score);
+  const leaderboard = buildLeaderboard(entries);
+
+  try {
+    await api.sendMessage(
+      groupId,
+      `🏆 *LIVE TEST — FINAL RESULTS*\n\n📝 *${escMd(liveTest.title)}*\n\n${leaderboard}\n\n🎉 Thanks to all *${participants.length}* participants\\!`,
+      { parse_mode: "MarkdownV2" }
+    );
+  } catch (err) {
+    logger.warn({ err }, "Could not post leaderboard to group");
+  }
+
+  await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, liveTestId));
+  emitTelemetry(`Live test completed with leaderboard: ${liveTest.title}`);
+}
 
 export function registerLiveTestHandlers(bot: Bot): void {
   bot.callbackQuery(/^live_join_/, async (ctx) => {
@@ -23,22 +237,24 @@ export function registerLiveTestHandlers(bot: Bot): void {
     const userId = ctx.from.id;
 
     const [liveTest] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, liveTestId)).limit(1);
-    if (!liveTest) {
-      await ctx.reply("❌ Live test not found.");
-      return;
-    }
+    if (!liveTest) { await ctx.reply("❌ Live test not found."); return; }
+
     if (liveTest.status === "live") {
-      await ctx.reply("⚠️ Live test already started! Ask admin to join next time.");
+      await ctx.reply("⚠️ This live test has already started. Join next time!");
       return;
     }
     if (liveTest.status === "completed") {
-      await ctx.reply("❌ This live test is already completed.");
+      await ctx.reply("❌ This live test has already ended.");
       return;
     }
 
     const participants = (liveTest.participants ?? []) as number[];
     if (participants.includes(userId)) {
-      await ctx.reply("✅ You are already registered for this live test!");
+      const schedTime = new Date(liveTest.scheduledAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+      await ctx.reply(
+        `✅ *Already registered\\!*\n\n📝 *${escMd(liveTest.title)}*\n⏰ Starts: *${escMd(schedTime)} IST*\n\n_Questions will be sent to you automatically when the test begins\\._`,
+        { parse_mode: "MarkdownV2" }
+      );
       return;
     }
 
@@ -47,209 +263,44 @@ export function registerLiveTestHandlers(bot: Bot): void {
 
     const schedTime = new Date(liveTest.scheduledAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
     await ctx.reply(
-      `✅ *Joined Live Test\\!*\n\n📝 *${escMd(liveTest.title)}*\n⏰ Starts at: *${escMd(schedTime)} IST*\n\n_You will automatically receive the questions when the test begins\\._`,
+      `✅ *Joined Live Test\\!*\n\n📝 *${escMd(liveTest.title)}*\n⏰ Starts: *${escMd(schedTime)} IST*\n\n_Questions will be sent to your DM automatically when the test begins\\. Stay tuned\\!_ 🎯`,
       { parse_mode: "MarkdownV2" }
     );
-
     emitTelemetry(`User ${userId} joined live test: ${liveTest.title}`);
   });
-
-  bot.on("poll_answer", async (ctx, next) => {
-    const { poll_id, option_ids, user } = ctx.pollAnswer;
-    if (!user) return next();
-
-    const userId = user.id;
-    const session = activeLiveSessions.get(userId);
-    if (!session) return next();
-
-    const expectedPollId = session.pollIds.get(userId);
-    if (poll_id !== expectedPollId) return next();
-
-    const timer = session.timers.get(userId);
-    if (timer) {
-      clearTimeout(timer);
-      session.timers.delete(userId);
-    }
-    session.pollIds.delete(userId);
-  });
-}
-
-export async function startLiveTest(liveTestId: number): Promise<void> {
-  const api = getApi();
-
-  const [liveTest] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, liveTestId)).limit(1);
-  if (!liveTest || liveTest.status !== "notified") {
-    logger.warn({ liveTestId }, "Live test not ready to start");
-    return;
-  }
-
-  const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, liveTest.testId)).limit(1);
-  if (!test) return;
-
-  const questions = test.questionsData as QuestionData[];
-  const participants = (liveTest.participants ?? []) as number[];
-
-  if (participants.length === 0) {
-    await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, liveTestId));
-    return;
-  }
-
-  await db.update(liveTestsTable).set({ status: "live" }).where(eq(liveTestsTable.id, liveTestId));
-  emitTelemetry(`Live test started: ${liveTest.title} — ${participants.length} participants`);
-
-  for (const userId of participants) {
-    const answers: (number | null)[] = questions.map(() => null);
-    await db.insert(liveTestAnswersTable).values({
-      liveTestId,
-      userId,
-      score: 0,
-      correctCount: 0,
-      answers,
-    }).catch(() => {});
-
-    try {
-      await api.sendMessage(userId,
-        `🔴 *LIVE TEST STARTED\\!*\n\n📝 *${escMd(liveTest.title)}*\n👥 Participants: *${participants.length}*\n\nGet ready\\! First question coming in 5 seconds…`,
-        { parse_mode: "MarkdownV2" }
-      );
-    } catch { }
-  }
-
-  await new Promise(r => setTimeout(r, 5000));
-
-  const scores = new Map<number, { score: number; correct: number; answers: (number | null)[] }>();
-  for (const p of participants) scores.set(p, { score: 0, correct: 0, answers: questions.map(() => null) });
-
-  const timerSec = test.timerSeconds ?? 30;
-
-  for (let qIdx = 0; qIdx < questions.length; qIdx++) {
-    const q = questions[qIdx]!;
-    const pollIds = new Map<number, string>();
-
-    for (const userId of participants) {
-      try {
-        const msg = await api.sendPoll(
-          userId,
-          `Q${qIdx + 1}/${questions.length}: ${q.question.slice(0, 280)}`,
-          q.options.map(o => ({ text: o.slice(0, 100) })),
-          {
-            type: "quiz",
-            correct_option_ids: [q.correctOptionIndex],
-            explanation: q.explanation ? q.explanation.slice(0, 200) : undefined,
-            is_anonymous: false,
-            open_period: timerSec,
-          }
-        );
-        const pollData = (msg as any).poll;
-        if (pollData?.id) pollIds.set(userId, pollData.id as string);
-      } catch { }
-    }
-
-    await new Promise(r => setTimeout(r, (timerSec + 2) * 1000));
-
-    for (const [, session] of activeLiveSessions) {
-      session.pollIds.clear();
-      session.timers.forEach(t => clearTimeout(t));
-      session.timers.clear();
-    }
-
-    if (qIdx < questions.length - 1) {
-      const leaderboard = buildLeaderboard(scores);
-      if (liveTest.groupChatId) {
-        try {
-          await api.sendMessage(
-            liveTest.groupChatId,
-            `📊 *After Q${qIdx + 1}/${questions.length} — Live Leaderboard*\n\n${leaderboard}\n\n⏳ Next question in 5s…`,
-            { parse_mode: "MarkdownV2" }
-          );
-        } catch { }
-      }
-      await new Promise(r => setTimeout(r, 5000));
-    }
-  }
-
-  const finalLeaderboard = buildLeaderboard(scores);
-  if (liveTest.groupChatId) {
-    try {
-      await api.sendMessage(
-        liveTest.groupChatId,
-        `🏆 *FINAL RESULTS — ${escMd(liveTest.title)}*\n\n${finalLeaderboard}\n\n🎉 Congratulations to all participants\\!`,
-        { parse_mode: "MarkdownV2" }
-      );
-    } catch { }
-  }
-
-  for (const userId of participants) {
-    const userScore = scores.get(userId);
-    if (!userScore) continue;
-    try {
-      await api.sendMessage(userId,
-        `🏁 *Live Test Completed\\!*\n\n📝 *${escMd(liveTest.title)}*\n\n✅ Correct: *${userScore.correct}*\n📊 Score: *${userScore.score}*\n\nCheck the group for the final leaderboard\\!`,
-        { parse_mode: "MarkdownV2" }
-      );
-    } catch { }
-  }
-
-  await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, liveTestId));
-  emitTelemetry(`Live test completed: ${liveTest.title}`);
-}
-
-function buildLeaderboard(scores: Map<number, { score: number; correct: number; answers: (number | null)[] }>): string {
-  const sorted = [...scores.entries()].sort((a, b) => b[1].score - a[1].score);
-  const medals = ["🥇", "🥈", "🥉"];
-  return sorted.slice(0, 10).map(([userId, s], i) => {
-    const medal = medals[i] ?? `${i + 1}.`;
-    return `${medal} User ${userId} — Score: *${s.score}* \\(${s.correct} correct\\)`;
-  }).join("\n") || "_No scores yet_";
-}
-
-export async function notifyLiveTestParticipants(liveTestId: number): Promise<void> {
-  const api = getApi();
-  const [liveTest] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, liveTestId)).limit(1);
-  if (!liveTest) return;
-
-  const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, liveTest.testId)).limit(1);
-
-  const allUsers = await db.select({ userId: usersTable.userId }).from(usersTable);
-  const schedTime = new Date(liveTest.scheduledAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
-
-  for (const { userId } of allUsers) {
-    try {
-      await api.sendMessage(userId,
-        `🔴 *LIVE MOCK TEST IN 30 MINUTES\\!*\n\n📝 *${escMd(liveTest.title)}*\n${test ? `📁 ${escMd(test.mainCategory)}` : ""}\n⏰ Starts: *${escMd(schedTime)} IST*\n\nJoin now to participate with everyone simultaneously\\!`,
-        { parse_mode: "MarkdownV2", reply_markup: liveTestJoinKeyboard(liveTestId) }
-      );
-      await new Promise(r => setTimeout(r, 50));
-    } catch { }
-  }
-
-  await db.update(liveTestsTable).set({ status: "notified" }).where(eq(liveTestsTable.id, liveTestId));
 }
 
 export function startLiveTestScheduler(): void {
   setInterval(async () => {
     try {
       const now = new Date();
-      const in30 = new Date(now.getTime() + 31 * 60 * 1000);
-      const in29 = new Date(now.getTime() + 29 * 60 * 1000);
+      const in5min30 = new Date(now.getTime() + 5 * 60 * 1000 + 30 * 1000);
+      const in4min30 = new Date(now.getTime() + 4 * 60 * 1000 + 30 * 1000);
 
-      const liveTests = await db.select().from(liveTestsTable).where(eq(liveTestsTable.status, "scheduled"));
-
-      for (const lt of liveTests) {
-        const schedAt = new Date(lt.scheduledAt);
-        if (schedAt >= in29 && schedAt <= in30) {
-          await notifyLiveTestParticipants(lt.id);
+      const scheduled = await db.select().from(liveTestsTable).where(eq(liveTestsTable.status, "scheduled"));
+      for (const lt of scheduled) {
+        if (new Date(lt.scheduledAt) > now) {
+          await announceLiveTest(lt.id).catch(err => logger.warn({ err, liveTestId: lt.id }, "Announce failed"));
+        } else {
+          await db.update(liveTestsTable).set({ status: "announced" }).where(eq(liveTestsTable.id, lt.id));
+          await startLiveTest(lt.id).catch(err => logger.error({ err }, "Live test start failed"));
         }
-        if (schedAt <= now) {
-          await db.update(liveTestsTable).set({ status: "notified" }).where(eq(liveTestsTable.id, lt.id));
-          startLiveTest(lt.id).catch(err => logger.error({ err }, "Live test start failed"));
+      }
+
+      const announced = await db.select().from(liveTestsTable).where(eq(liveTestsTable.status, "announced"));
+      for (const lt of announced) {
+        const schedAt = new Date(lt.scheduledAt);
+        if (schedAt <= in5min30 && schedAt >= in4min30) {
+          await sendLiveTestReminder(lt.id).catch(err => logger.warn({ err }, "Reminder failed"));
+        } else if (schedAt <= now) {
+          await startLiveTest(lt.id).catch(err => logger.error({ err }, "Live test start failed"));
         }
       }
 
       const notified = await db.select().from(liveTestsTable).where(eq(liveTestsTable.status, "notified"));
       for (const lt of notified) {
         if (new Date(lt.scheduledAt) <= now) {
-          startLiveTest(lt.id).catch(err => logger.error({ err }, "Live test start failed"));
+          await startLiveTest(lt.id).catch(err => logger.error({ err }, "Live test start failed"));
         }
       }
     } catch (err) {

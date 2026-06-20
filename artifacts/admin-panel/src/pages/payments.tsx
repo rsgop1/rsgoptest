@@ -20,7 +20,7 @@ import { CheckCircle, XCircle, Image as ImageIcon } from "lucide-react";
 export default function Payments() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const { data: payments, isLoading } = useAdminListPayments(
-    statusFilter !== "all" ? { params: { status: statusFilter } } : {}
+    statusFilter !== "all" ? { status: statusFilter } : undefined
   );
   const queryClient = useQueryClient();
   const { toast } = useToast();

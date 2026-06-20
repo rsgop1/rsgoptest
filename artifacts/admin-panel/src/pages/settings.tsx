@@ -16,7 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Save, Send, Megaphone, Settings as SettingsIcon, Users, Download, Plus, Trash2 } from "lucide-react";
+import { Save, Send, Megaphone, Settings as SettingsIcon, Users, Download, Upload, Plus, Trash2 } from "lucide-react";
+import { useRef } from "react";
 
 interface BotGroup {
   id: string;
@@ -110,8 +111,41 @@ export default function Settings() {
     setBotGroups((g) => g.filter((x) => x.id !== id));
   };
 
-  const handleExport = (type: "users" | "payments" | "analytics") => {
-    window.open(`/api/admin/export/${type}`, "_blank");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+
+  const handleExportAll = () => {
+    window.open("/api/admin/export/all", "_blank");
+  };
+
+  const handleImportAll = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const res = await fetch("/api/admin/import/all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
+      const result = await res.json() as { success?: boolean; imported?: Record<string, number>; error?: string };
+      if (result.success) {
+        toast({
+          title: "✅ Import Successful",
+          description: `Users: ${result.imported?.users ?? 0}, Tests: ${result.imported?.tests ?? 0}, Payments: ${result.imported?.payments ?? 0}`,
+        });
+      } else {
+        toast({ title: "❌ Import Failed", description: result.error ?? "Unknown error", variant: "destructive" });
+      }
+    } catch (err) {
+      toast({ title: "❌ Import Failed", description: "Invalid JSON file", variant: "destructive" });
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   if (isLoading) {
@@ -326,59 +360,48 @@ export default function Settings() {
         </CardContent>
       </Card>
 
-      {/* Export Data */}
+      {/* Export / Import */}
       <Card className="shadow-sm">
         <CardHeader>
           <div className="flex items-center gap-2">
             <Download className="h-5 w-5 text-primary" />
-            <CardTitle>Export Data</CardTitle>
+            <CardTitle>Backup & Restore</CardTitle>
           </div>
-          <CardDescription>Download CSV files for analysis and backup</CardDescription>
+          <CardDescription>Export all bot data as JSON or restore from a backup file</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="p-4 border rounded-lg space-y-3">
               <div>
-                <p className="font-medium text-sm">Users Export</p>
-                <p className="text-xs text-muted-foreground">All registered users with stats</p>
+                <p className="font-medium text-sm">Export All Data</p>
+                <p className="text-xs text-muted-foreground">Downloads full backup — users, tests, payments, history, achievements, settings</p>
               </div>
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => handleExport("users")}
-              >
+              <Button className="w-full" onClick={handleExportAll}>
                 <Download className="h-4 w-4 mr-2" />
-                Download users.csv
+                Download Backup (.json)
               </Button>
             </div>
 
             <div className="p-4 border rounded-lg space-y-3">
               <div>
-                <p className="font-medium text-sm">Payments Export</p>
-                <p className="text-xs text-muted-foreground">All payment transactions</p>
+                <p className="font-medium text-sm">Import Data</p>
+                <p className="text-xs text-muted-foreground">Restore from a backup JSON file — existing records are kept, new ones are added</p>
               </div>
+              <input
+                type="file"
+                accept=".json"
+                ref={fileInputRef}
+                className="hidden"
+                onChange={handleImportAll}
+              />
               <Button
                 variant="outline"
                 className="w-full"
-                onClick={() => handleExport("payments")}
+                disabled={importing}
+                onClick={() => fileInputRef.current?.click()}
               >
-                <Download className="h-4 w-4 mr-2" />
-                Download payments.csv
-              </Button>
-            </div>
-
-            <div className="p-4 border rounded-lg space-y-3">
-              <div>
-                <p className="font-medium text-sm">Analytics Export</p>
-                <p className="text-xs text-muted-foreground">All test attempt history</p>
-              </div>
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => handleExport("analytics")}
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Download analytics.csv
+                <Upload className="h-4 w-4 mr-2" />
+                {importing ? "Importing…" : "Import Backup (.json)"}
               </Button>
             </div>
           </div>

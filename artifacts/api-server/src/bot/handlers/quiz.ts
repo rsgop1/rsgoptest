@@ -478,8 +478,19 @@ export function registerQuizHandlers(bot: Bot): void {
   bot.callbackQuery("sol_noop", async (ctx) => { await ctx.answerCallbackQuery(); });
 
   bot.callbackQuery(/^ai_info_/, async (ctx) => {
-    await ctx.answerCallbackQuery({ text: "🤖 Getting AI analysis…" });
     const userId = ctx.from.id;
+
+    const [userRow] = await db.select({ tier: usersTable.tier }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    if (userRow?.tier !== "Premium") {
+      await ctx.answerCallbackQuery({ text: "❌ Premium feature! Use /premium to upgrade.", show_alert: true });
+      await ctx.reply(
+        `❌ *AI Info is a Premium Feature\\!*\n\nFree users cannot access AI analysis\\.\n\n💎 *Upgrade to Premium to unlock:*\n✅ AI Info for every question\n✅ All mock tests unlocked\n✅ No ads before tests\n✅ Custom timer \\(30s–120s\\)\n\n👉 Use /premium to upgrade\\!`,
+        { parse_mode: "MarkdownV2" }
+      );
+      return;
+    }
+
+    await ctx.answerCallbackQuery({ text: "🤖 Getting AI analysis…" });
     const session = getSession(userId);
     if (!session.solution) {
       await ctx.reply("❌ No solution session active.");

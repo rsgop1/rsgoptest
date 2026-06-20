@@ -178,7 +178,7 @@ export default function FlashSales() {
                         className="text-destructive hover:bg-destructive/10"
                         onClick={() => {
                           if (confirm("Are you sure you want to end/delete this flash sale?")) {
-                            deleteMutation.mutate({ saleId: sale.id });
+                            deleteMutation.mutate({ id: sale.id });
                           }
                         }}
                       >
