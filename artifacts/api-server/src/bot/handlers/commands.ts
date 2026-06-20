@@ -204,7 +204,7 @@ export function registerCommandHandlers(bot: Bot): void {
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "deepseek/deepseek-r1-0528-qwen3-8b:free",
+          model: "openai/gpt-oss-120b:free",
           messages: [
             {
               role: "system",
