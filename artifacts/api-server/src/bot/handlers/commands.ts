@@ -8,8 +8,9 @@ import {
   purchasedTestsTable,
   flashSalesTable,
   reportsTable,
+  liveTestsTable,
 } from "@workspace/db";
-import { eq, and, gte, lte, sql } from "drizzle-orm";
+import { eq, and, gte, lte, sql, ne } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
 import { getSession, updateSession, clearQuiz } from "../session.js";
 import { paymentKeyboard, premiumKeyboard, testDetailWithStartKeyboard, paymentKeyboard as pkb } from "../keyboards.js";
@@ -59,7 +60,84 @@ async function getActiveSale(testId: string) {
   return sale ?? null;
 }
 
+function formatIST(date: Date): string {
+  return date.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: true,
+  });
+}
+
 export function registerCommandHandlers(bot: Bot): void {
+  bot.command("help", async (ctx) => {
+    await ctx.reply(
+      `📚 *Series TestPro — Commands*\n\n` +
+      `*Study & Practice:*\n` +
+      `/test\\_series — Browse & start mock tests\n` +
+      `/notebook — Practice your wrong questions\n` +
+      `/doubt — AI doubt solver \\(3/day free\\)\n\n` +
+      `*Stats & Rankings:*\n` +
+      `/leaderboard — Top performers ranking\n` +
+      `/stats — Your personal analytics\n\n` +
+      `*Live Tests:*\n` +
+      `/live — Upcoming live mock tests\n\n` +
+      `*Challenges & Social:*\n` +
+      `/challenge — Challenge a friend to a test duel\n` +
+      `/anon — Anonymous doubt in study group\n\n` +
+      `*Account:*\n` +
+      `/premium — Upgrade to Premium 💎\n` +
+      `/start — Home & referral link\n` +
+      `/stop — Stop current test\n\n` +
+      `💡 _Premium = all tests unlocked \\+ unlimited AI \\+ no ads \\+ custom timer_`,
+      { parse_mode: "MarkdownV2" }
+    );
+  });
+
+  bot.command("live", async (ctx) => {
+    try {
+      const upcoming = await db
+        .select()
+        .from(liveTestsTable)
+        .where(ne(liveTestsTable.status, "completed"))
+        .limit(5);
+
+      if (!upcoming.length) {
+        await ctx.reply(
+          `📡 *No Live Tests Scheduled*\n\nNo upcoming live mock tests right now\\.\n\nFollow our group or channel to get notified when a live test is announced\\! 🔔`,
+          { parse_mode: "MarkdownV2" }
+        );
+        return;
+      }
+
+      let msg = `🔴 *Upcoming Live Mock Tests*\n\n`;
+      const kb = new InlineKeyboard();
+
+      for (const lt of upcoming) {
+        const schedTime = new Date(lt.scheduledAt).toLocaleString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          day: "2-digit", month: "short",
+          hour: "2-digit", minute: "2-digit", hour12: true,
+        });
+        const participants = Array.isArray(lt.participants) ? lt.participants.length : 0;
+        const statusEmoji = lt.status === "live" ? "🔴 LIVE" : lt.status === "notified" ? "⚡ Starting Soon" : "📅";
+
+        msg += `${statusEmoji} *${escMd(lt.title)}*\n`;
+        msg += `⏰ ${escMd(schedTime)} IST\n`;
+        msg += `👥 ${participants} joined\n\n`;
+
+        if (lt.status !== "live") {
+          kb.url(`✅ Join: ${lt.title.slice(0, 25)}`, `https://t.me/gt_testprobot?start=livetestjoin_${lt.id}`).row();
+        }
+      }
+
+      msg += `_Join before the test starts\\! Questions are sent to your DM automatically\\._`;
+      await ctx.reply(msg, { parse_mode: "MarkdownV2", reply_markup: kb });
+    } catch (err) {
+      logger.error({ err }, "live command error");
+      await ctx.reply("❌ Error loading live tests. Please try again.");
+    }
+  });
+
   bot.command("stop", async (ctx) => {
     const userId = ctx.from!.id;
     const session = getSession(userId);

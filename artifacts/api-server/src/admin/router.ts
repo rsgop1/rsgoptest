@@ -9,10 +9,11 @@ import {
   couponCodesTable,
   liveTestsTable,
 } from "@workspace/db";
-import { eq, and, count, gte, sql } from "drizzle-orm";
+import { eq, and, count, gte, sql, inArray } from "drizzle-orm";
 import { layout, statCard, alert } from "./html.js";
 import { getApi } from "../bot/api-instance.js";
 import { setConfig, getConfig } from "../bot/handlers/helpers.js";
+import { announceLiveTest, sendLiveTestReminder, startLiveTest } from "../bot/handlers/live-test.js";
 import { logger } from "../lib/logger.js";
 import { randomUUID } from "crypto";
 
@@ -567,6 +568,83 @@ router.delete("/coupons/:id", requireAuth, async (req, res) => {
   } catch (err) {
     logger.error({ err }, "Error deleting coupon");
     res.status(500).json({ error: "Failed to delete coupon" });
+  }
+});
+
+router.post("/coupons/:id/toggle", requireAuth, async (req, res) => {
+  try {
+    const id = parseInt(String(req.params["id"] ?? "0"));
+    const { isActive } = req.body as { isActive: boolean };
+    await db.update(couponCodesTable).set({ isActive }).where(eq(couponCodesTable.id, id));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Error toggling coupon");
+    res.status(500).json({ error: "Failed to toggle coupon" });
+  }
+});
+
+router.get("/live-tests/:id/participants", requireAuth, async (req, res) => {
+  try {
+    const id = parseInt(String(req.params["id"] ?? "0"));
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Live test not found" }); return; }
+    const participantIds: number[] = Array.isArray(lt.participants) ? lt.participants as number[] : [];
+    if (participantIds.length === 0) { res.json([]); return; }
+    const users = await db
+      .select({ userId: usersTable.userId, fullName: usersTable.fullName, tier: usersTable.tier, username: usersTable.username })
+      .from(usersTable)
+      .where(inArray(usersTable.userId, participantIds));
+    res.json(users);
+  } catch (err) {
+    logger.error({ err }, "Error getting participants");
+    res.status(500).json({ error: "Failed to get participants" });
+  }
+});
+
+router.post("/live-tests/:id/announce", requireAuth, async (req, res) => {
+  try {
+    const id = parseInt(String(req.params["id"] ?? "0"));
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Live test not found" }); return; }
+    announceLiveTest(id).catch(err => logger.error({ err }, "Announce live test error"));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Error announcing live test");
+    res.status(500).json({ error: "Failed to announce" });
+  }
+});
+
+router.post("/live-tests/:id/notify", requireAuth, async (req, res) => {
+  try {
+    const id = parseInt(String(req.params["id"] ?? "0"));
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Live test not found" }); return; }
+    if (lt.status === "scheduled") {
+      await db.update(liveTestsTable).set({ status: "announced" }).where(eq(liveTestsTable.id, id));
+    }
+    sendLiveTestReminder(id).catch(err => logger.error({ err }, "Notify live test error"));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Error notifying live test");
+    res.status(500).json({ error: "Failed to notify" });
+  }
+});
+
+router.post("/live-tests/:id/start", requireAuth, async (req, res) => {
+  try {
+    const id = parseInt(String(req.params["id"] ?? "0"));
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Live test not found" }); return; }
+    if (lt.status === "completed") { res.status(400).json({ error: "Already completed" }); return; }
+    if (lt.status === "live") { res.status(400).json({ error: "Already live" }); return; }
+    if (!["announced", "notified"].includes(lt.status)) {
+      await db.update(liveTestsTable).set({ status: "announced" }).where(eq(liveTestsTable.id, id));
+    }
+    startLiveTest(id).catch(err => logger.error({ err }, "Force start live test error"));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Error starting live test");
+    res.status(500).json({ error: "Failed to start live test" });
   }
 });
 
