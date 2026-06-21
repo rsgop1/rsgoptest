@@ -64,7 +64,8 @@ router.post("/auth/login", (req: Request, res: Response) => {
     res.cookie(COOKIE_NAME, signValue("admin"), {
       httpOnly: true,
       maxAge: 24 * 60 * 60 * 1000,
-      sameSite: "lax",
+      sameSite: "none",
+      secure: true,
     });
     res.json({ authenticated: true });
   } else {

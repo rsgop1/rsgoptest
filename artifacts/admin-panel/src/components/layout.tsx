@@ -68,7 +68,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const queryClient = useQueryClient();
 
-  const { data: user, isLoading, isError } = useAdminGetMe();
+  const { data: user, isLoading, isError } = useAdminGetMe({ query: { retry: false, staleTime: 30_000 } });
 
   const logoutMutation = useAdminLogout({
     mutation: {
