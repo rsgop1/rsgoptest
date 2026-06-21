@@ -12,8 +12,9 @@ import {
   reportsTable,
   liveTestsTable,
   achievementsTable,
+  couponCodesTable,
 } from "@workspace/db";
-import { eq, and, count, gte, sql, desc, gt, lt } from "drizzle-orm";
+import { eq, and, count, gte, sql, desc, gt, lt, inArray } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
 import { getApi } from "../bot/api-instance.js";
 import { setConfig, getConfig } from "../bot/handlers/helpers.js";
@@ -796,6 +797,215 @@ router.delete("/live-tests/:id", requireAuth, async (req: Request, res: Response
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to cancel live test" });
+  }
+});
+
+router.get("/live-tests/:id/participants", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Live test not found" }); return; }
+    const participantIds: number[] = Array.isArray(lt.participants) ? lt.participants as number[] : [];
+    if (participantIds.length === 0) { res.json([]); return; }
+    const users = await db
+      .select({ userId: usersTable.userId, fullName: usersTable.fullName, tier: usersTable.tier, username: usersTable.username })
+      .from(usersTable)
+      .where(inArray(usersTable.userId, participantIds));
+    res.json(users);
+  } catch (err) {
+    logger.error({ err }, "Error getting participants");
+    res.status(500).json({ error: "Failed to get participants" });
+  }
+});
+
+router.post("/live-tests/:id/announce", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Not found" }); return; }
+    // Force to scheduled so announceLiveTest runs
+    await db.update(liveTestsTable).set({ status: "scheduled" }).where(eq(liveTestsTable.id, id));
+    const { announceLiveTest } = await import("../bot/handlers/live-test.js");
+    announceLiveTest(id).catch(err => logger.error({ err }, "Announce error"));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Announce live test error");
+    res.status(500).json({ error: "Failed to announce" });
+  }
+});
+
+router.post("/live-tests/:id/notify", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Not found" }); return; }
+    // Force to announced so sendLiveTestReminder runs
+    await db.update(liveTestsTable).set({ status: "announced" }).where(eq(liveTestsTable.id, id));
+    const { sendLiveTestReminder } = await import("../bot/handlers/live-test.js");
+    sendLiveTestReminder(id).catch(err => logger.error({ err }, "Reminder error"));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Notify live test error");
+    res.status(500).json({ error: "Failed to notify" });
+  }
+});
+
+router.post("/live-tests/:id/start", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Not found" }); return; }
+    if (lt.status === "completed") { res.status(400).json({ error: "Already completed" }); return; }
+    if (lt.status === "live") { res.status(400).json({ error: "Already live" }); return; }
+    // Force to announced so startLiveTest proceeds
+    await db.update(liveTestsTable).set({ status: "announced" }).where(eq(liveTestsTable.id, id));
+    const { startLiveTest } = await import("../bot/handlers/live-test.js");
+    startLiveTest(id).catch(err => logger.error({ err }, "Start error"));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Start live test error");
+    res.status(500).json({ error: "Failed to start" });
+  }
+});
+
+router.post("/live-tests/:id/stop", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Not found" }); return; }
+    await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, id));
+    const participantIds: number[] = Array.isArray(lt.participants) ? lt.participants as number[] : [];
+    const api = getApi();
+    let notified = 0;
+    for (const userId of participantIds) {
+      try {
+        await api.sendMessage(userId,
+          `🏁 *Live Test Ended*\n\n_${lt.title}_ has been stopped by admin\\. Thank you for participating\\!`,
+          { parse_mode: "MarkdownV2" }
+        );
+        notified++;
+        await new Promise(r => setTimeout(r, 50));
+      } catch { }
+    }
+    res.json({ ok: true, notified });
+  } catch (err) {
+    logger.error({ err }, "Stop live test error");
+    res.status(500).json({ error: "Failed to stop" });
+  }
+});
+
+router.post("/live-tests/:id/message", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    const { message } = req.body as { message: string };
+    if (!message?.trim()) { res.status(400).json({ error: "Message required" }); return; }
+    const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
+    if (!lt) { res.status(404).json({ error: "Not found" }); return; }
+    const participantIds: number[] = Array.isArray(lt.participants) ? lt.participants as number[] : [];
+    const api = getApi();
+    let sent = 0;
+    for (const userId of participantIds) {
+      try {
+        await api.sendMessage(userId, `📢 *${lt.title}*\n\n${message}`, { parse_mode: "Markdown" });
+        sent++;
+        await new Promise(r => setTimeout(r, 50));
+      } catch { }
+    }
+    res.json({ ok: true, sent });
+  } catch (err) {
+    logger.error({ err }, "Message participants error");
+    res.status(500).json({ error: "Failed to send message" });
+  }
+});
+
+// ── AI SETTINGS ───────────────────────────────────────────────────────────────
+router.get("/ai-settings", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const aiEnabled = await getConfig("ai_enabled");
+    const doubtPrompt = await getConfig("doubt_prompt");
+    const aiInfoPrompt = await getConfig("ai_info_prompt");
+    res.json({
+      aiEnabled: aiEnabled !== "false",
+      doubtPrompt: doubtPrompt ?? "",
+      aiInfoPrompt: aiInfoPrompt ?? "",
+    });
+  } catch (err) {
+    logger.error({ err }, "AI settings GET error");
+    res.status(500).json({ error: "Failed to load AI settings" });
+  }
+});
+
+router.post("/ai-settings", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { aiEnabled, doubtPrompt, aiInfoPrompt } = req.body as {
+      aiEnabled: boolean; doubtPrompt: string; aiInfoPrompt: string;
+    };
+    await setConfig("ai_enabled", String(aiEnabled));
+    if (doubtPrompt !== undefined) await setConfig("doubt_prompt", doubtPrompt);
+    if (aiInfoPrompt !== undefined) await setConfig("ai_info_prompt", aiInfoPrompt);
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "AI settings POST error");
+    res.status(500).json({ error: "Failed to save AI settings" });
+  }
+});
+
+// ── COUPON CODES ─────────────────────────────────────────────────────────────
+router.get("/coupons", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const coupons = await db.select().from(couponCodesTable).orderBy(couponCodesTable.id);
+    res.json(coupons);
+  } catch (err) {
+    logger.error({ err }, "Coupons GET error");
+    res.status(500).json({ error: "Failed to load coupons" });
+  }
+});
+
+router.post("/coupons", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { code, discountInr, discountStars, discountPct, usageLimit, expiresAt } = req.body as {
+      code: string; discountInr: number; discountStars: number;
+      discountPct: number; usageLimit: number; expiresAt?: string;
+    };
+    if (!code?.trim()) { res.status(400).json({ error: "Coupon code is required" }); return; }
+    const [coupon] = await db.insert(couponCodesTable).values({
+      code: code.toUpperCase().trim(),
+      discountInr: discountInr ?? 0,
+      discountStars: discountStars ?? 0,
+      discountPct: discountPct ?? 0,
+      usageLimit: usageLimit ?? 100,
+      expiresAt: expiresAt ? new Date(expiresAt) : null,
+    }).returning();
+    res.json(coupon);
+  } catch (err: any) {
+    logger.error({ err }, "Coupon create error");
+    if (err.code === "23505") {
+      res.status(409).json({ error: "Coupon code already exists" });
+    } else {
+      res.status(500).json({ error: "Failed to create coupon" });
+    }
+  }
+});
+
+router.post("/coupons/:id/toggle", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    const { isActive } = req.body as { isActive: boolean };
+    await db.update(couponCodesTable).set({ isActive }).where(eq(couponCodesTable.id, id));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Coupon toggle error");
+    res.status(500).json({ error: "Failed to toggle coupon" });
+  }
+});
+
+router.delete("/coupons/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    await db.delete(couponCodesTable).where(eq(couponCodesTable.id, Number(req.params["id"])));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Coupon delete error");
+    res.status(500).json({ error: "Failed to delete coupon" });
   }
 });
 

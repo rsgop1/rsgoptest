@@ -153,7 +153,10 @@ export default function LiveTests() {
         body: JSON.stringify({
           testId: data.testId,
           title: data.title,
-          scheduledAt: data.scheduledAt,
+          // datetime-local gives IST time; append IST offset so server stores correct UTC
+          scheduledAt: data.scheduledAt
+            ? new Date(data.scheduledAt + ":00+05:30").toISOString()
+            : data.scheduledAt,
           groupChatId: data.groupChatId || undefined,
         }),
       }),
