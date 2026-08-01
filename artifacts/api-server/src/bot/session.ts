@@ -72,6 +72,13 @@ export interface UserSession {
   pendingReport?: PendingReport;
   pendingAnonDoubt?: boolean;
   pendingTimerSelect?: string;
+  pendingPractice?: {
+    testId: string;
+    startQuestion?: number;
+    timerSeconds?: number;
+    totalQuestions: number;
+    awaiting: "start" | "count";
+  };
   pendingFileIdMode?: boolean;
   pendingCoupon?: PendingCoupon;
   awaitingCouponInput?: boolean;

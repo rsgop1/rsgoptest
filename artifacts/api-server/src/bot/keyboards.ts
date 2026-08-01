@@ -94,6 +94,18 @@ export function timerSelectKeyboard(testId: string, isPremium: boolean): InlineK
   return kb;
 }
 
+export function practiceCountKeyboard(testId: string, totalQuestions: number): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (const count of [10, 25, 50, 75, 100]) {
+    if (count <= totalQuestions) kb.text(String(count), `practice_count_${testId}_${count}`);
+    if (count === 25 || count === 100) kb.row();
+  }
+  kb.text("All", `practice_count_${testId}_all`).row()
+    .text("Custom", `practice_custom_${testId}`).row()
+    .text("Cancel", "go_test_series");
+  return kb;
+}
+
 export function attemptsKeyboard(testId: string, attemptIds: number[]): InlineKeyboard {
   const kb = new InlineKeyboard();
   for (let i = 0; i < attemptIds.length; i++) {

@@ -18,7 +18,7 @@ import {
   type SolutionSession,
 } from "../session.js";
 import { getApi } from "../api-instance.js";
-import { scorecardKeyboard, solutionNavKeyboard, attemptsKeyboard, reattemptChoiceKeyboard, skipQuestionKeyboard } from "../keyboards.js";
+import { scorecardKeyboard, solutionNavKeyboard, attemptsKeyboard, reattemptChoiceKeyboard, skipQuestionKeyboard, practiceCountKeyboard } from "../keyboards.js";
 import { logger } from "../../lib/logger.js";
 import { getConfig } from "./helpers.js";
 import { postChallengeResult } from "./challenge.js";
@@ -165,7 +165,9 @@ export async function startQuizForUser(
   userId: number,
   test: { testId: string; testName: string; questionsData: unknown; timerSeconds: number | null; positiveMarking: number; negativeMarking: number },
   sendStartMsg = true,
-  customTimer?: number
+  customTimer?: number,
+  startQuestion = 1,
+  questionCount?: number
 ): Promise<void> {
   const api = getApi();
   const questions = test.questionsData as QuestionData[];
@@ -189,6 +191,9 @@ export async function startQuizForUser(
     return;
   }
 
+  const safeStart = Math.max(1, Math.min(startQuestion, questions.length));
+  const availableQuestions = questions.slice(safeStart - 1);
+  const selectedQuestions = questionCount ? availableQuestions.slice(0, questionCount) : availableQuestions;
   const timerSeconds = customTimer ?? test.timerSeconds ?? 30;
   const noTimer = timerSeconds === 0;
 
@@ -197,12 +202,12 @@ export async function startQuizForUser(
     quiz: {
       testId: test.testId,
       testName: test.testName,
-      questions,
+      questions: selectedQuestions,
       currentIndex: 0,
       correctCount: 0,
       wrongCount: 0,
       skippedCount: 0,
-      userAnswers: questions.map(() => null),
+      userAnswers: selectedQuestions.map(() => null),
       pollMessageIds: [],
       wrongQuestionIds: [],
       cheatWarnings: 0,
@@ -214,7 +219,7 @@ export async function startQuizForUser(
   if (sendStartMsg) {
     const timerDisplay = noTimer ? "♾️ No Limit \\(Premium\\)" : `*${timerSeconds}s* per question`;
     await api.sendMessage(userId,
-      `🚀 *${escMd(test.testName.trim())}* starting\\!\n\n📝 Questions: *${questions.length}*\n⏱️ Timer: ${timerDisplay}\n➕ Correct: *\\+${escMd(String(test.positiveMarking))}*  ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n\nAll the best\\! 💪\n\n_Type /stop anytime to end the test_`,
+      `🚀 *${escMd(test.testName.trim())}* starting\\!\n\n📝 Questions: *${selectedQuestions.length}*\n⏱️ Timer: ${timerDisplay}\n➕ Correct: *\\+${escMd(String(test.positiveMarking))}*  ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n\nAll the best\\! 💪\n\n_Type /stop anytime to end the test_`,
       { parse_mode: "MarkdownV2" }
     );
   }
@@ -794,19 +799,22 @@ Keep total response under 180 words. Plain English only. No bullet symbols excep
 
     const [user] = await db.select({ tier: usersTable.tier }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
     const isPremium = user?.tier === "Premium";
+    const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
+    if (!test) { await ctx.reply("❌ Test not found."); return; }
+    const qCount = Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 0;
 
     if (isPremium) {
-      const { timerSelectKeyboard } = await import("../keyboards.js");
-      updateSession(userId, { pendingTimerSelect: testId });
+      updateSession(userId, { pendingPractice: {
+        testId,
+        totalQuestions: qCount,
+        awaiting: "start",
+      }});
       await ctx.reply(
-        `⏱️ *Select Your Timer*\n\n💎 As a Premium user, choose how long you want per question:\n_\\(Choose ♾️ No Time Limit for self\\-paced practice\\)_`,
-        { parse_mode: "MarkdownV2", reply_markup: timerSelectKeyboard(testId, true) }
+        `▶️ *Where do you want to start?*\n\nType the question serial number from which you want to continue\\.\n\nExample: type *21* to start from question 21\\.`,
+        { parse_mode: "MarkdownV2" }
       );
       return;
     }
-
-    const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
-    if (!test) { await ctx.reply("❌ Test not found."); return; }
 
     const [ad] = await db.select().from(adsTable).where(eq(adsTable.isActive, true)).limit(1);
     if (ad) {
@@ -829,8 +837,49 @@ Keep total response under 180 words. Plain English only. No bullet symbols excep
     const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
     if (!test) { await ctx.reply("❌ Test not found."); return; }
 
-    updateSession(userId, { pendingTimerSelect: undefined });
-    await startQuizForUser(userId, test, true, timerSec);
+    const pending = getSession(userId).pendingPractice;
+    if (pending) {
+      updateSession(userId, { pendingPractice: { ...pending, timerSeconds: timerSec, awaiting: "count" } });
+      await ctx.reply(
+        `🔢 *How many questions do you want to practice?*\n\nTotal number of questions in this set: *${pending.totalQuestions}*\n\nYou can choose any number up to ${pending.totalQuestions}\\.`,
+        { parse_mode: "MarkdownV2", reply_markup: practiceCountKeyboard(testId, pending.totalQuestions) }
+      );
+    } else {
+      updateSession(userId, { pendingTimerSelect: undefined });
+      await startQuizForUser(userId, test, true, timerSec);
+    }
+  });
+
+  bot.callbackQuery(/^practice_count_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const parts = ctx.callbackQuery.data.replace("practice_count_", "").split("_");
+    const value = parts.pop()!;
+    const testId = parts.join("_");
+    const userId = ctx.from.id;
+    const pending = getSession(userId).pendingPractice;
+    if (!pending || pending.testId !== testId) return;
+    const count = value === "all" ? pending.totalQuestions : Number(value);
+    if (!Number.isInteger(count) || count < 1 || count > pending.totalQuestions) {
+      await ctx.reply("❌ Invalid question count.");
+      return;
+    }
+    const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
+    if (!test) return;
+    updateSession(userId, { pendingPractice: undefined });
+    try { await ctx.deleteMessage(); } catch {}
+    await startQuizForUser(userId, test, true, pending.timerSeconds, pending.startQuestion, count);
+  });
+
+  bot.callbackQuery(/^practice_custom_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const testId = ctx.callbackQuery.data.replace("practice_custom_", "");
+    const pending = getSession(ctx.from.id).pendingPractice;
+    if (!pending || pending.testId !== testId) return;
+    updateSession(ctx.from.id, { pendingPractice: { ...pending, awaiting: "count" } });
+    await ctx.reply(
+      `✍️ *Enter number of questions to practice*\n\nEnter a number between 1 and ${pending.totalQuestions}\\.`,
+      { parse_mode: "MarkdownV2" }
+    );
   });
 
   bot.callbackQuery(/^start_test_/, async (ctx) => {

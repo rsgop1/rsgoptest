@@ -13,7 +13,7 @@ import {
 import { eq, and, gte, lte, sql, ne } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
 import { getSession, updateSession, clearQuiz } from "../session.js";
-import { paymentKeyboard, premiumKeyboard, testDetailWithStartKeyboard, paymentKeyboard as pkb } from "../keyboards.js";
+import { paymentKeyboard, premiumKeyboard, testDetailWithStartKeyboard, paymentKeyboard as pkb, timerSelectKeyboard } from "../keyboards.js";
 import { sendNextQuestion, startQuizForUser } from "./quiz.js";
 import { getConfig } from "./helpers.js";
 import { logger } from "../../lib/logger.js";
@@ -467,6 +467,54 @@ export function registerCommandHandlers(bot: Bot): void {
     const userId = ctx.from!.id;
     const session = getSession(userId);
     const text = ctx.message.text ?? "";
+
+    const pendingPractice = session.pendingPractice;
+    if (pendingPractice && /^\d+$/.test(text.trim())) {
+      const value = Number(text.trim());
+      const [test] = await db.select().from(testSeriesTable)
+        .where(eq(testSeriesTable.testId, pendingPractice.testId)).limit(1);
+      if (!test) {
+        updateSession(userId, { pendingPractice: undefined });
+        await ctx.reply("❌ Test not found. Please open the test again.");
+        return;
+      }
+
+      if (pendingPractice.awaiting === "start") {
+        if (value < 1 || value > pendingPractice.totalQuestions) {
+          await ctx.reply(`❌ Please enter a serial number between 1 and ${pendingPractice.totalQuestions}.`);
+          return;
+        }
+        updateSession(userId, {
+          pendingPractice: { ...pendingPractice, startQuestion: value, awaiting: "count" },
+        });
+        await ctx.reply(
+          `⏱️ *Select Your Timer*\n\n💎 Choose how long you want per question:\n_Choose ♾️ No Time Limit for self\\-paced practice_`,
+          { parse_mode: "MarkdownV2", reply_markup: timerSelectKeyboard(test.testId, true) }
+        );
+        return;
+      }
+
+      if (value < 1 || value > pendingPractice.totalQuestions) {
+        await ctx.reply(`❌ Please enter a number between 1 and ${pendingPractice.totalQuestions}.`);
+        return;
+      }
+      updateSession(userId, { pendingPractice: undefined });
+      await startQuizForUser(
+        userId, test, true, pendingPractice.timerSeconds,
+        pendingPractice.startQuestion, value
+      );
+      return;
+    }
+
+    if (pendingPractice?.awaiting === "start") {
+      await ctx.reply(`❌ Please enter a valid question serial number between 1 and ${pendingPractice.totalQuestions}.`);
+      return;
+    }
+
+    if (pendingPractice?.awaiting === "count") {
+      await ctx.reply(`❌ Please enter a valid number between 1 and ${pendingPractice.totalQuestions}.`);
+      return;
+    }
 
     if (session.pendingReport?.step === "awaiting_text") {
       updateSession(userId, { pendingReport: undefined });
