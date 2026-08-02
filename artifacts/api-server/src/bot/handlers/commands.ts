@@ -18,6 +18,7 @@ import { sendNextQuestion, startQuizForUser } from "./quiz.js";
 import { getConfig } from "./helpers.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
+import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -302,43 +303,12 @@ export function registerCommandHandlers(bot: Bot): void {
         return;
       }
 
-      const apiKey = process.env["OPENROUTER_API_KEY"] ?? process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
-      const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"] ?? "https://openrouter.ai/api/v1";
-
-      if (!apiKey) {
-        await ctx.api.editMessageText(ctx.chat.id, thinkMsg.message_id,
-          "❌ AI service not configured yet. Please try again later."
-        );
-        return;
-      }
-
       const customPrompt = await getConfig("doubt_prompt");
-      const systemPrompt = customPrompt || "You are a sharp educational AI for Indian competitive exam students (SSC, Railway, Banking, Bihar/State Govt). Answer the question directly and concisely. No filler words. No markdown symbols (no **, no __, no #). Max 120 words. Give the direct answer first, then 1-2 supporting facts if needed. End with one exam tip if relevant.";
-
-      const resp = await fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: "openai/gpt-oss-120b:free",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: text }
-          ],
-          max_tokens: 300,
-        }),
-      });
-
-      const data = await resp.json() as {
-        choices?: Array<{ message?: { content?: string } }>;
-        error?: { message: string };
-      };
-
-      if (data.error) throw new Error(data.error.message);
-
-      const answer = data.choices?.[0]?.message?.content ?? "Could not get an answer. Please try again.";
+       const systemPrompt = `${BOT_HELP_CONTEXT}\n${customPrompt || "You are a sharp educational AI for Indian competitive exam students. Answer directly and concisely. No filler words. No markdown symbols. Max 120 words. End with one exam tip if relevant."}`;
+       const answer = await askOpenRouter([
+         { role: "system", content: systemPrompt },
+         { role: "user", content: text },
+       ], { maxTokens: 8192 });
       const limitNote = !isPremium ? `\n\n_Free doubts left today: ${MAX_FREE_DOUBTS - (userRow?.aiDoubtCount ?? 0)}_` : "";
 
       await ctx.api.editMessageText(
@@ -486,25 +456,10 @@ export function registerCommandHandlers(bot: Bot): void {
           }
           await db.update(usersTable).set({ aiDoubtCount: usedToday + 1, aiDoubtDate: today }).where(eq(usersTable.userId, userId));
         }
-        const apiKey = process.env["OPENROUTER_API_KEY"] ?? process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
-        const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"] ?? "https://openrouter.ai/api/v1";
-        if (!apiKey) throw new Error("AI service not configured");
-        const response = await fetch(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model: "openai/gpt-4o-mini",
-            max_tokens: 8192,
-            temperature: 0.3,
-            messages: [
-              { role: "system", content: "You are Series TestPro's exam tutor. Explain clearly for Indian competitive exam students. Answer directly, show steps for calculations, use short headings, and finish with one practice tip. Never invent facts." },
-              { role: "user", content: text.slice(0, 4000) },
-            ],
-          }),
-        });
-        const data = await response.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
-        if (!response.ok || data.error) throw new Error(data.error?.message ?? `AI request failed: ${response.status}`);
-        const answer = data.choices?.[0]?.message?.content?.trim() ?? "I could not prepare an answer. Please try again.";
+        const answer = await askOpenRouter([
+          { role: "system", content: "You are Series TestPro's exam tutor. Explain clearly for Indian competitive exam students. Answer directly, show steps for calculations, use short headings, and finish with one practice tip. Never invent facts." },
+          { role: "user", content: text.slice(0, 4000) },
+        ]);
         await ctx.api.editMessageText(ctx.chat.id, thinkMsg.message_id, `🤖 *AI Tutor*\n\n${escMd(answer)}\n\n_Ask another question with /ai\\_tutor_`, { parse_mode: "MarkdownV2" });
       } catch (error) {
         logger.error({ error, userId }, "ai tutor error");

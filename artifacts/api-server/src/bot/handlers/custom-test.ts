@@ -14,6 +14,7 @@ import { getApi } from "../api-instance.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 import type { QuestionData } from "@workspace/db";
+import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -79,11 +80,6 @@ async function generateQuestionsFromText(
   language: "en" | "hi",
   topic: string
 ): Promise<QuestionData[]> {
-  const apiKey = process.env["OPENROUTER_API_KEY"] ?? process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
-  const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"] ?? "https://openrouter.ai/api/v1";
-
-  if (!apiKey) throw new Error("AI service not configured");
-
   const langInstruction =
     language === "hi"
       ? "Generate ALL questions, options, and explanations in Hindi (Devanagari script)."
@@ -118,35 +114,13 @@ OUTPUT FORMAT (JSON array only, no other text):
 
 Generate exactly ${count} questions now:`;
 
-  const resp = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+  const raw = await askOpenRouter([
+    {
+      role: "system",
+      content: `${BOT_HELP_CONTEXT}\nYou are a precise JSON-generating exam question setter. Output only valid JSON arrays. No markdown, no explanation outside JSON.`,
     },
-    body: JSON.stringify({
-       model: "openai/gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a precise JSON-generating exam question setter. Output only valid JSON arrays. No markdown, no explanation outside JSON.",
-        },
-        { role: "user", content: prompt },
-      ],
-       max_tokens: 8192,
-      temperature: 0.7,
-    }),
-  });
-
-  if (!resp.ok) throw new Error(`AI API error: ${resp.status}`);
-  const data = (await resp.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-    error?: { message: string };
-  };
-  if (data.error) throw new Error(data.error.message);
-
-  const raw = data.choices?.[0]?.message?.content ?? "[]";
+    { role: "user", content: prompt },
+  ], { maxTokens: 8192, temperature: 0.7 });
   const jsonMatch = raw.match(/\[[\s\S]*\]/);
   if (!jsonMatch) throw new Error("AI did not return valid JSON array");
 
@@ -575,7 +549,7 @@ export function registerCustomTestHandlers(bot: Bot): void {
   // Start a custom set test
   //
   bot.callbackQuery(/^customset_start_/, async (ctx) => {
-    await ctx.answerCallbackQuery({ text: "⏳ Loading your test..." });
+    await ctx.answerCallbackQuery();
     const setId = parseInt(ctx.callbackQuery.data.replace("customset_start_", ""), 10);
 
     const [set] = await db
@@ -589,6 +563,21 @@ export function registerCustomTestHandlers(bot: Bot): void {
       return;
     }
 
+    const kb = new InlineKeyboard().text("🚀 Start Test", `customset_begin_${set.id}`).row().text("📂 My Sets", "my_custom_sets");
+    await ctx.reply(
+      `📋 ${set.title}\n\n📝 Questions: ${set.questionCount}\n⏱️ Timer: 30 seconds per question\n➕ Correct: +1   ➖ Wrong: -0.25\n🤖 Generated from your PDF\n\nTap Start Test to begin.`,
+      { reply_markup: kb },
+    );
+  });
+
+  bot.callbackQuery(/^customset_begin_/, async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "🚀 Starting..." });
+    const setId = parseInt(ctx.callbackQuery.data.replace("customset_begin_", ""), 10);
+    const [set] = await db.select().from(userCustomSetsTable).where(eq(userCustomSetsTable.id, setId)).limit(1);
+    if (!set || set.status !== "ready") {
+      await ctx.reply("❌ Test set not ready yet.");
+      return;
+    }
     const { startQuizForUser } = await import("./quiz.js");
     await startQuizForUser(ctx.from.id, {
       testId: `custom_${set.id}`,

@@ -98,13 +98,13 @@ export function registerSupportHandlers(bot: Bot): void {
     updateSession(userId, { pendingSupportTicket: undefined });
 
     try {
-      await db.insert(supportTicketsTable).values({
+      const [ticket] = await db.insert(supportTicketsTable).values({
         userId,
         category,
         message: text.slice(0, 2000),
         status: "open",
         priority: "normal",
-      });
+      }).returning({ id: supportTicketsTable.id });
 
       emitTelemetry(`Support ticket created by user ${userId}: ${category}`);
 
@@ -120,8 +120,8 @@ export function registerSupportHandlers(bot: Bot): void {
       const adminChatId = process.env["ADMIN_CHAT_ID"];
       if (adminChatId) {
         const adminKb = new InlineKeyboard()
-          .text("✅ Resolve", `tkt_resolve_`)
-          .text("🔒 Close", `tkt_close_`);
+          .text("✅ Resolve", `tkt_resolve_${ticket?.id ?? ""}`)
+          .text("🔒 Close", `tkt_close_${ticket?.id ?? ""}`);
         const api = (await import("../api-instance.js")).getApi();
         try {
           await api.sendMessage(
@@ -135,12 +135,11 @@ export function registerSupportHandlers(bot: Bot): void {
       }
 
       await ctx.reply(
-        `✅ *Ticket Submitted\\!*\n\n` +
-          `📂 Category: *${escMd(CATEGORIES[category] ?? category)}*\n` +
-          `🆔 Ticket #\\*\\*\\*\\*${String(Date.now()).slice(-4)}\n\n` +
-          `Our team will review your issue and get back to you soon\\.\n\n` +
-          `_You can check /dashboard anytime for updates\\._`,
-        { parse_mode: "MarkdownV2" }
+        `✅ Ticket submitted!\n\n` +
+          `Category: ${CATEGORIES[category] ?? category}\n` +
+          `Ticket #${ticket?.id ?? "pending"}\n\n` +
+          `Our team will review your issue and get back to you soon.\n\n` +
+          `Use /profile anytime to check your account.`,
       );
     } catch (err) {
       logger.error({ err, userId }, "Failed to create support ticket");

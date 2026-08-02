@@ -19,6 +19,7 @@ import { getConfig } from "./helpers.js";
 import { trySetGroupTitles } from "./achievements.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
+import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -34,27 +35,30 @@ function dashboardMsg(name: string, sub: string, tier: string, refLink: string):
   const premiumLine = tier === "Premium"
     ? "💎 *Premium*"
     : "🆓 Free — /premium to upgrade";
-  return `👋 *Welcome back, ${escMd(name)}\\!*
+  return `👋 Welcome back, ${name}!
 
-🎯 Target: *${escMd(sub)}*
+🎯 Target: ${sub}
 🏅 Tier: ${premiumLine}
 
-📚 *Commands:*
-/test\\_series — Browse & start mock tests
-/createtest — 🧪 Create test from your PDF \\(Premium\\)
-/mysets — 📂 View your custom test sets
+📚 Commands:
+/test_series — Browse & start mock tests
+/createtest — Create a test from your PDF (Premium)
+/mysets — View your custom test sets
 /leaderboard — Top performers ranking
 /stats — Your performance analytics
 /notebook — Practice wrong questions
 /challenge — Start a group challenge
 /premium — Upgrade to Premium
 /doubt — AI Doubt Solver
-/ai\_tutor — Interactive AI Tutor
-/dashboard — Profile & progress dashboard
+/ai_tutor — Interactive AI Tutor
+/ai — AI tools menu
+/dashboard — Full dashboard
+/profile — Profile and premium status
+/support — Create a support ticket
 /anon — Post anonymous doubt in group
 
-👥 *Your Referral Link:*
-\`${escMd(refLink)}\``;
+👥 Your Referral Link:
+${refLink}`;
 }
 
 async function upsertUser(
@@ -275,7 +279,7 @@ export function registerStartHandlers(bot: Bot): void {
         const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, from.id)).limit(1);
         const sub = user?.targetExamSub ?? "Not set";
         const tier = user?.tier ?? "Free";
-        await ctx.reply(dashboardMsg(from.first_name, sub, tier, refLink), { parse_mode: "MarkdownV2" });
+         await ctx.reply(dashboardMsg(from.first_name, sub, tier, refLink));
         await trySetGroupTitles(from.id).catch(() => {});
       }
     } catch (err) {
@@ -373,6 +377,69 @@ export function registerStartHandlers(bot: Bot): void {
     }
   });
 
+  bot.command("profile", async (ctx) => {
+    const userId = ctx.from!.id;
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    if (!user) {
+      await ctx.reply("Please send /start first.");
+      return;
+    }
+    const isPremium = user.tier === "Premium" && !!user.premiumExpiry && user.premiumExpiry > new Date();
+    const daysLeft = isPremium
+      ? Math.max(0, Math.ceil((user.premiumExpiry!.getTime() - Date.now()) / 86400000))
+      : 0;
+    const renewKb = new InlineKeyboard()
+      .text("🔄 Renew Premium", "renew_premium")
+      .row()
+      .text("📊 Open Dashboard", "open_dashboard");
+    const status = isPremium
+      ? `💎 Premium Member\n📅 ${daysLeft} day${daysLeft === 1 ? "" : "s"} remaining\n⏰ Valid till: ${user.premiumExpiry!.toLocaleDateString("en-IN")}`
+      : "🆓 Free Member\nUse /premium to unlock all features";
+    await ctx.reply(
+      `👤 Profile\n\nName: ${user.fullName}\nUsername: ${user.username ? `@${user.username}` : "Not set"}\nTarget exam: ${user.targetExamSub ?? "Not set"}\n\n${status}\n\n📝 Tests taken: ${user.totalTestsTaken}\n🪙 Referral coins: ${user.referralCount}`,
+      { reply_markup: isPremium ? renewKb : new InlineKeyboard().text("💎 Upgrade Premium", "premium_upi") },
+    );
+  });
+
+  bot.callbackQuery("renew_premium", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.reply(
+      "💎 You are already a Premium member.\n\nWant to renew and extend your access?",
+      { reply_markup: new InlineKeyboard().text("🔄 Renew via UPI", "premium_upi").row().text("⭐ Renew with Stars", "premium_stars") },
+    );
+  });
+
+  bot.callbackQuery("open_dashboard", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.reply("Use /dashboard to open your complete progress dashboard.");
+  });
+
+  bot.command("ai", async (ctx) => {
+    await ctx.reply(
+      "🤖 AI Study Center\n\nChoose an AI tool:",
+      { reply_markup: new InlineKeyboard().text("🧠 AI Tutor", "ai_menu_tutor").row().text("❓ Ask a Doubt", "ai_menu_doubt").row().text("📝 Generate Practice Qs", "ai_menu_questions") },
+    );
+  });
+
+  bot.callbackQuery("ai_menu_tutor", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.reply("Use /ai_tutor, then send your question in the next message.");
+  });
+
+  bot.callbackQuery("ai_menu_doubt", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.reply("Use /doubt followed by your question, for example:\n/doubt Explain compound interest");
+  });
+
+  bot.callbackQuery("ai_menu_questions", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const message = await askOpenRouter([
+      { role: "system", content: `${BOT_HELP_CONTEXT}\nYou create one concise Indian competitive-exam MCQ. Return question, four options, correct answer, and a one-line explanation in plain text.` },
+      { role: "user", content: "Generate one mixed SSC/Railway/Banking practice question." },
+    ]);
+    await ctx.reply(`📝 AI Practice Question\n\n${message}`);
+  });
+
   // Dashboard sub-actions
   bot.callbackQuery("dash_stats", async (ctx) => {
     await ctx.answerCallbackQuery();
@@ -437,7 +504,7 @@ export function registerStartHandlers(bot: Bot): void {
       `🔍 Doubt solving from any topic\n` +
       `📝 Practice question generation\n` +
       `💡 Study tips & strategies\n\n` +
-      `_Type your question below or use /doubt <question>_\n` +
+       `_Type your question below or use /doubt \\<question\\>_\n` +
       (user.tier !== "Premium" ? `_Free: 2 doubts/day — Upgrade to Premium for unlimited_\n` : `_♾️ Unlimited for Premium users_\n`) +
       `_Send /cancel to stop_`,
       { parse_mode: "MarkdownV2" }

@@ -10,3 +10,4 @@
 - [FormFields-in-render remount bug](react-formfields-remount.md) — defining a component (FormFields) inside a render function causes it to remount on every keystroke; always use inline JSX function (renderFormFields()) instead.
 - [Custom test MarkdownV2 gotchas](custom-test-markdownv2.md) — `=` inside `_..._` must be `\\=`, silent failures via bot.catch, prefer editMessageText over delete+reply.
 - [PDF-grounded AI and tutor flow](pdf-ai-tutor-flow.md) — binary PDF bytes are not text; use real extraction, publish command menus, and handle tutor follow-up state.
+- [Bot AI, support, and profile flows](bot-ai-and-support.md) — centralize OpenRouter usage and prefer plain text for dynamic Telegram confirmations.

@@ -25,6 +25,7 @@ import { postChallengeResult } from "./challenge.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 import { checkAndAwardAchievements } from "./achievements.js";
 import { InlineKeyboard } from "grammy";
+import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -549,14 +550,6 @@ export function registerQuizHandlers(bot: Bot): void {
     const userOptText = userAns !== null && userAns !== undefined ? (q.options[userAns] ?? "?") : "Skipped";
     const wrongOpts = q.options.filter((_, i) => i !== q.correctOptionIndex);
 
-    const apiKey = process.env["OPENROUTER_API_KEY"] ?? process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
-    const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"] ?? "https://openrouter.ai/api/v1";
-
-    if (!apiKey) {
-      await ctx.reply("❌ AI service not configured. Ask admin to add OpenRouter API key.");
-      return;
-    }
-
     const thinkMsg = await ctx.reply("🤖 *AI analyzing…*", { parse_mode: "MarkdownV2" });
 
     try {
@@ -591,23 +584,10 @@ ${wrongOptsText}
 
 Keep total response under 180 words. Plain English only. No bullet symbols except the ones shown.`;
 
-      const resp = await fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model: "openai/gpt-oss-120b:free",
-          messages: [
-            { role: "system", content: "You are a concise educational AI for Indian competitive exam students. Always respond in plain English with no markdown formatting symbols." },
-            { role: "user", content: prompt }
-          ],
-          max_tokens: 600,
-        }),
-      });
-
-      const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message: string } };
-      if (data.error) throw new Error(data.error.message);
-
-      const rawAnswer = data.choices?.[0]?.message?.content ?? "Could not get analysis.";
+      const rawAnswer = await askOpenRouter([
+        { role: "system", content: `${BOT_HELP_CONTEXT}\nYou are a concise educational AI for Indian competitive exam students. Always respond in plain English with no markdown formatting symbols.` },
+        { role: "user", content: prompt },
+      ], { maxTokens: 8192 });
       const cleanAnswer = rawAnswer.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
 
       const statusIcon = userAns === null || userAns === undefined ? "⏭️" : userAns === q.correctOptionIndex ? "✅" : "❌";

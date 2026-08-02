@@ -56,6 +56,8 @@ export function startBot(): void {
         { command: "test_series", description: "Browse mock tests" },
         { command: "ai_tutor", description: "Ask the interactive AI Tutor" },
         { command: "dashboard", description: "View your progress dashboard" },
+        { command: "profile", description: "View profile and Premium days" },
+        { command: "ai", description: "Open AI study tools" },
         { command: "createtest", description: "Create a test from your PDF" },
         { command: "mysets", description: "View your custom test sets" },
         { command: "stats", description: "View performance stats" },
