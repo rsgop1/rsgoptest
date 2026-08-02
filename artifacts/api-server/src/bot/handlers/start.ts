@@ -49,6 +49,8 @@ function dashboardMsg(name: string, sub: string, tier: string, refLink: string):
 /challenge — Start a group challenge
 /premium — Upgrade to Premium
 /doubt — AI Doubt Solver
+/ai\_tutor — Interactive AI Tutor
+/dashboard — Profile & progress dashboard
 /anon — Post anonymous doubt in group
 
 👥 *Your Referral Link:*
@@ -426,6 +428,7 @@ export function registerStartHandlers(bot: Bot): void {
       }
     }
 
+    updateSession(userId, { pendingAiTutor: true });
     await ctx.reply(
       `🧠 *AI Tutor* — Your Personal Study Assistant\n\n` +
       `Ask me anything about your exam preparation\\!\n\n` +

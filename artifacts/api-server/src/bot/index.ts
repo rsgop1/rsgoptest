@@ -51,6 +51,16 @@ export function startBot(): void {
     onStart: (info) => {
       logger.info({ username: info.username }, "Telegram bot started");
       setBotUsername(info.username);
+      bot.api.setMyCommands([
+        { command: "start", description: "Home and welcome" },
+        { command: "test_series", description: "Browse mock tests" },
+        { command: "ai_tutor", description: "Ask the interactive AI Tutor" },
+        { command: "dashboard", description: "View your progress dashboard" },
+        { command: "createtest", description: "Create a test from your PDF" },
+        { command: "mysets", description: "View your custom test sets" },
+        { command: "stats", description: "View performance stats" },
+        { command: "support", description: "Contact support" },
+      ]).catch((error) => logger.warn({ error }, "Could not publish bot command menu"));
       emitTelemetry(`Bot started: @${info.username}`);
 
       setInterval(async () => {

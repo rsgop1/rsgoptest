@@ -26,7 +26,7 @@ function escMd(text: string): string {
 const KNOWN_COMMANDS = [
   "/start", "/test_series", "/leaderboard", "/stats",
   "/notebook", "/challenge", "/premium", "/doubt",
-  "/stop", "/myid", "/anon", "/live",
+   "/stop", "/myid", "/anon", "/live", "/ai_tutor", "/dashboard",
 ];
 
 function looksLikeTypo(text: string): string | null {
@@ -467,6 +467,56 @@ export function registerCommandHandlers(bot: Bot): void {
     const userId = ctx.from!.id;
     const session = getSession(userId);
     const text = ctx.message.text ?? "";
+
+    if (session.pendingAiTutor && !text.startsWith("/")) {
+      updateSession(userId, { pendingAiTutor: false });
+      const thinkMsg = await ctx.reply("🧠 Tutor is thinking\\.\\.\\.", { parse_mode: "MarkdownV2" });
+      try {
+        const [user] = await db.select({
+          tier: usersTable.tier,
+          aiDoubtCount: usersTable.aiDoubtCount,
+          aiDoubtDate: usersTable.aiDoubtDate,
+        }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+        if (user?.tier !== "Premium") {
+          const today = new Date().toISOString().slice(0, 10);
+          const usedToday = user?.aiDoubtDate === today ? (user.aiDoubtCount ?? 0) : 0;
+          if (usedToday >= 2) {
+            await ctx.api.editMessageText(ctx.chat.id, thinkMsg.message_id, "🤖 AI Tutor daily limit reached\\. Use /premium for unlimited access\\.", { parse_mode: "MarkdownV2" });
+            return;
+          }
+          await db.update(usersTable).set({ aiDoubtCount: usedToday + 1, aiDoubtDate: today }).where(eq(usersTable.userId, userId));
+        }
+        const apiKey = process.env["OPENROUTER_API_KEY"] ?? process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"];
+        const baseUrl = process.env["AI_INTEGRATIONS_OPENROUTER_BASE_URL"] ?? "https://openrouter.ai/api/v1";
+        if (!apiKey) throw new Error("AI service not configured");
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model: "openai/gpt-4o-mini",
+            max_tokens: 8192,
+            temperature: 0.3,
+            messages: [
+              { role: "system", content: "You are Series TestPro's exam tutor. Explain clearly for Indian competitive exam students. Answer directly, show steps for calculations, use short headings, and finish with one practice tip. Never invent facts." },
+              { role: "user", content: text.slice(0, 4000) },
+            ],
+          }),
+        });
+        const data = await response.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
+        if (!response.ok || data.error) throw new Error(data.error?.message ?? `AI request failed: ${response.status}`);
+        const answer = data.choices?.[0]?.message?.content?.trim() ?? "I could not prepare an answer. Please try again.";
+        await ctx.api.editMessageText(ctx.chat.id, thinkMsg.message_id, `🤖 *AI Tutor*\n\n${escMd(answer)}\n\n_Ask another question with /ai\\_tutor_`, { parse_mode: "MarkdownV2" });
+      } catch (error) {
+        logger.error({ error, userId }, "ai tutor error");
+        await ctx.api.editMessageText(ctx.chat.id, thinkMsg.message_id, "❌ AI Tutor is temporarily unavailable. Please try again shortly.");
+      }
+      return;
+    }
+    if (text === "/cancel" && session.pendingAiTutor) {
+      updateSession(userId, { pendingAiTutor: false });
+      await ctx.reply("✅ AI Tutor session closed.");
+      return;
+    }
 
     const pendingPractice = session.pendingPractice;
     if (pendingPractice && /^\d+$/.test(text.trim())) {

@@ -13,7 +13,7 @@ import { eq, and, lte, gte, sql } from "drizzle-orm";
 import { getSession, updateSession } from "../session.js";
 import { getConfig } from "./helpers.js";
 import { logger } from "../../lib/logger.js";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -71,14 +71,23 @@ function scheduleCartAbandonment(bot: Bot, userId: number, amount: number, testI
     const session = getSession(userId);
     if (!session.pendingUpiPayment) return;
 
-    const discountAmount = Math.round(amount * 0.9);
+    const couponCode = `COME${randomBytes(3).toString("hex").toUpperCase()}`;
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    await db.insert(couponCodesTable).values({
+      code: couponCode,
+      discountPct: 10,
+      usageLimit: 1,
+      expiresAt,
+      isActive: true,
+    }).onConflictDoNothing().catch((error) => logger.warn({ error, userId }, "Could not create abandoned-cart coupon"));
+    const discountAmount = Math.max(1, Math.round(amount * 0.9));
     const adminUpi = await getAdminUpi();
 
     try {
       await bot.api.sendMessage(
         userId,
-        `💸 *Payment Incomplete\\?*\n\nWe noticed you generated a payment QR but haven't completed the transaction yet\\.\n\n🎁 *Special Offer:* Pay *₹${discountAmount}* instead of *₹${amount}* \\(10% OFF\\!\\)\n\nThis offer is valid for the next *5 minutes* only\\!\n\n🏦 UPI ID: \`${escMd(adminUpi)}\`\n\nSend screenshot after payment to unlock instantly\\! ⚡`,
-        { parse_mode: "MarkdownV2" }
+        `💸 *Payment Incomplete\\?*\n\nWe noticed you generated a payment QR but haven't completed the transaction yet\\.\n\n🎁 *Special Offer:* Pay *₹${discountAmount}* instead of *₹${amount}* \\(10% OFF\\!\\)\n\n🏷️ Your one\\-time coupon: \`${escMd(couponCode)}\`\n\nThis offer is valid for the next *5 minutes* only\\. Tap the payment button again and enter this code\\.\n\n🏦 UPI ID: \`${escMd(adminUpi)}\`\n\nSend screenshot after payment to unlock instantly\\! ⚡`,
+        { parse_mode: "MarkdownV2", reply_markup: new InlineKeyboard().text("💳 Pay with Coupon", testId ? `pay_upi_${testId}` : "premium_upi") }
       );
     } catch (err) {
       logger.warn({ err, userId }, "Cart abandonment message failed");

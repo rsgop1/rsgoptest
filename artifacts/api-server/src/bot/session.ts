@@ -92,6 +92,7 @@ export interface UserSession {
     category: string;
     step: "awaiting_description";
   };
+  pendingAiTutor?: boolean;
 }
 
 const sessions = new Map<number, UserSession>();

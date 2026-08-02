@@ -4,11 +4,18 @@ import { db } from "@workspace/db";
 import { userCustomSetsTable, usersTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 import { randomBytes } from "crypto";
+import { mkdtemp, writeFile, rm } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { getSession, updateSession } from "../session.js";
 import { getApi } from "../api-instance.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 import type { QuestionData } from "@workspace/db";
+
+const execFileAsync = promisify(execFile);
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, "\\$&");
@@ -32,28 +39,36 @@ async function extractTextFromPdf(fileId: string): Promise<string> {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`Failed to download PDF: ${resp.status}`);
 
-  const buffer = await resp.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  const workDir = await mkdtemp(join(tmpdir(), "testpro-pdf-"));
+  const inputPath = join(workDir, "source.pdf");
+  const outputPath = join(workDir, "source.txt");
+  try {
+    await writeFile(inputPath, buffer);
+    await execFileAsync("pdftotext", ["-layout", "-enc", "UTF-8", inputPath, outputPath], {
+      timeout: 45_000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    const { readFile } = await import("fs/promises");
+    const extracted = await readFile(outputPath, "utf8");
+    const text = extracted
+      .replace(/\u0000/g, " ")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
 
-  let text = "";
-  for (let i = 0; i < bytes.length; i++) {
-    const ch = bytes[i]!;
-    if (ch >= 32 && ch <= 126) {
-      text += String.fromCharCode(ch);
-    } else if (ch === 10 || ch === 13) {
-      text += " ";
+    if (text.length < 100) {
+      throw new Error("Could not extract enough text from PDF. This may be a scanned/image-only PDF.");
     }
+    return text.slice(0, 50000);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("ENOENT")) {
+      throw new Error("PDF extraction is unavailable on the server.");
+    }
+    throw error;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
-
-  text = text
-    .replace(/\s+/g, " ")
-    .replace(/[^\w\s.,!?;:()\-'"]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (text.length < 100)
-    throw new Error("Could not extract enough text from PDF. Please make sure the PDF has selectable text.");
-  return text.slice(0, 12000);
 }
 
 // ─── AI question generation ────────────────────────────────────────────────────
@@ -82,6 +97,7 @@ MATERIAL:
 ${text}
 
 RULES:
+0. Every question MUST be answerable from the MATERIAL. Do not use outside facts, generic exam knowledge, or invented details. Keep the key term, person, date, formula, or concept from the material in the question or explanation.
 1. ${langInstruction}
 2. Each question must have exactly 4 options (A, B, C, D).
 3. Only one option must be correct.
@@ -109,7 +125,7 @@ Generate exactly ${count} questions now:`;
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "openai/gpt-4o-mini",
+       model: "openai/gpt-4o-mini",
       messages: [
         {
           role: "system",
@@ -118,7 +134,7 @@ Generate exactly ${count} questions now:`;
         },
         { role: "user", content: prompt },
       ],
-      max_tokens: 4000,
+       max_tokens: 8192,
       temperature: 0.7,
     }),
   });
@@ -141,7 +157,17 @@ Generate exactly ${count} questions now:`;
     explanation: string;
   }>;
 
-  return parsed.slice(0, count).map((q, i) => ({
+  const valid = parsed.filter((q) =>
+    typeof q.question === "string" &&
+    q.question.trim().length > 10 &&
+    Array.isArray(q.options) &&
+    q.options.length === 4 &&
+    typeof q.correctOptionIndex === "number"
+  );
+  if (valid.length < Math.max(1, Math.floor(count * 0.6))) {
+    throw new Error("AI returned too few complete questions grounded in the PDF.");
+  }
+  return valid.slice(0, count).map((q, i) => ({
     id: `custom_q_${Date.now()}_${i}`,
     question: q.question ?? "Question",
     options: (q.options ?? []).slice(0, 4),
