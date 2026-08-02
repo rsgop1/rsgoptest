@@ -224,6 +224,7 @@ router.get("/tests", requireAuth, async (_req: Request, res: Response) => {
       timerSeconds: t.timerSeconds,
       createdAt: t.createdAt.toISOString(),
       questionCount: Array.isArray(t.questionsData) ? t.questionsData.length : 0,
+      questionsData: t.questionsData,
     })));
   } catch (err) {
     logger.error({ err }, "Admin list tests error");
