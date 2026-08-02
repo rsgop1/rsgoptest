@@ -30,7 +30,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Trash2, ExternalLink, FileText, Search, RefreshCw, Bot, Eye, Clock3, UserRound, Link2 } from "lucide-react";
+import { Trash2, ExternalLink, FileText, Search, RefreshCw, Bot, Eye, Clock3, UserRound, Link2, Pencil, BarChart2, Globe, GlobeLock } from "lucide-react";
 
 interface CustomQuestion {
   id?: string;
@@ -56,18 +56,23 @@ interface CustomSet {
   fullName: string | null;
   username: string | null;
   questionsData: CustomQuestion[] | null;
+  priceInr: number;
+  priceInStars: number;
+  timerSeconds: number;
+  positiveMarking: number;
+  negativeMarking: number;
 }
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = "/api/admin";
 
 async function fetchCustomSets(): Promise<CustomSet[]> {
-  const res = await fetch(`${BASE}/api/admin/custom-sets`, { credentials: "include" });
+  const res = await fetch(`${BASE}/custom-sets`, { credentials: "include" });
   if (!res.ok) throw new Error("Failed to fetch custom sets");
   return res.json();
 }
 
 async function deleteCustomSet(id: number): Promise<void> {
-  const res = await fetch(`${BASE}/api/admin/custom-sets/${id}`, {
+  const res = await fetch(`${BASE}/custom-sets/${id}`, {
     method: "DELETE",
     credentials: "include",
   });
@@ -79,6 +84,10 @@ export default function CustomSetsPage() {
   const [search, setSearch] = useState("");
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [selectedSet, setSelectedSet] = useState<CustomSet | null>(null);
+  const [editSet, setEditSet] = useState<CustomSet | null>(null);
+  const [analyticsSet, setAnalyticsSet] = useState<CustomSet | null>(null);
+  const [editForm, setEditForm] = useState({ title: "", language: "en", priceInr: 0, priceInStars: 0, timerSeconds: 30, positiveMarking: 1, negativeMarking: 0 });
+  const [saving, setSaving] = useState(false);
 
   const { data: sets = [], isLoading, refetch } = useQuery<CustomSet[]>({
     queryKey: ["admin-custom-sets"],
@@ -97,6 +106,39 @@ export default function CustomSetsPage() {
       toast.error("Failed to delete set");
     },
   });
+
+  const updateSet = async (id: number, payload: Record<string, unknown>) => {
+    const res = await fetch(`${BASE}/custom-sets/${id}`, {
+      method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? "Update failed");
+    return res.json();
+  };
+
+  const togglePublic = async (set: CustomSet) => {
+    try {
+      await updateSet(set.id, { isActive: !set.isActive });
+      await refetch();
+      toast.success(set.isActive ? "Set unpublished" : "Set published");
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Update failed"); }
+  };
+
+  const openEdit = (set: CustomSet) => {
+    setEditSet(set);
+    setEditForm({ title: set.title, language: set.language, priceInr: set.priceInr, priceInStars: set.priceInStars, timerSeconds: set.timerSeconds, positiveMarking: set.positiveMarking, negativeMarking: set.negativeMarking });
+  };
+
+  const saveEdit = async () => {
+    if (!editSet) return;
+    setSaving(true);
+    try {
+      await updateSet(editSet.id, editForm);
+      await refetch();
+      setEditSet(null);
+      toast.success("Custom test updated");
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Update failed"); }
+    finally { setSaving(false); }
+  };
 
   const filtered = sets.filter((s) => {
     const q = search.toLowerCase();
@@ -265,6 +307,9 @@ export default function CustomSetsPage() {
                             >
                               <Eye className="h-3.5 w-3.5" />
                             </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit test" onClick={() => openEdit(s)}><Pencil className="h-3.5 w-3.5" /></Button>
+                            <Button variant="ghost" size="icon" className={`h-7 w-7 ${s.isActive ? "text-emerald-600" : "text-muted-foreground"}`} title={s.isActive ? "Unpublish" : "Publish"} onClick={() => togglePublic(s)}>{s.isActive ? <Globe className="h-3.5 w-3.5" /> : <GlobeLock className="h-3.5 w-3.5" />}</Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="View analytics" onClick={() => setAnalyticsSet(s)}><BarChart2 className="h-3.5 w-3.5" /></Button>
                             <Button
                               variant="ghost"
                               size="icon"
@@ -285,6 +330,30 @@ export default function CustomSetsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Sheet open={!!editSet} onOpenChange={(open) => !open && setEditSet(null)}>
+        <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+          <SheetHeader><SheetTitle>Edit custom test</SheetTitle><SheetDescription>Manage the public title, pricing and quiz rules.</SheetDescription></SheetHeader>
+          <div className="space-y-4 py-6">
+            <label className="block text-sm font-medium">Title<Input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} /></label>
+            <label className="block text-sm font-medium">Language<select className="mt-1 w-full rounded-md border bg-background p-2" value={editForm.language} onChange={(e) => setEditForm({ ...editForm, language: e.target.value })}><option value="en">English</option><option value="hi">Hindi</option></select></label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-sm font-medium">Price INR<Input type="number" min="0" value={editForm.priceInr} onChange={(e) => setEditForm({ ...editForm, priceInr: Number(e.target.value) })} /></label>
+              <label className="text-sm font-medium">Price Stars<Input type="number" min="0" value={editForm.priceInStars} onChange={(e) => setEditForm({ ...editForm, priceInStars: Number(e.target.value) })} /></label>
+              <label className="text-sm font-medium">Timer seconds<Input type="number" min="0" value={editForm.timerSeconds} onChange={(e) => setEditForm({ ...editForm, timerSeconds: Number(e.target.value) })} /></label>
+              <label className="text-sm font-medium">Positive marks<Input type="number" min="0" value={editForm.positiveMarking} onChange={(e) => setEditForm({ ...editForm, positiveMarking: Number(e.target.value) })} /></label>
+              <label className="text-sm font-medium">Negative marks<Input type="number" min="0" value={editForm.negativeMarking} onChange={(e) => setEditForm({ ...editForm, negativeMarking: Number(e.target.value) })} /></label>
+            </div>
+            <Button className="w-full" onClick={saveEdit} disabled={saving}>{saving ? "Saving…" : "Save changes"}</Button>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={!!analyticsSet} onOpenChange={(open) => !open && setAnalyticsSet(null)}>
+        <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+          {analyticsSet && <CustomSetAnalytics set={analyticsSet} />}
+        </SheetContent>
+      </Sheet>
 
       <Sheet open={!!selectedSet} onOpenChange={(open) => !open && setSelectedSet(null)}>
         <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
@@ -348,4 +417,20 @@ export default function CustomSetsPage() {
       </AlertDialog>
     </div>
   );
+}
+
+function CustomSetAnalytics({ set }: { set: CustomSet }) {
+  const { data, isLoading, error } = useQuery<any>({
+    queryKey: ["custom-set-analytics", set.id],
+    queryFn: async () => {
+      const response = await fetch(`${BASE}/custom-sets/${set.id}/analytics`, { credentials: "include" });
+      if (!response.ok) throw new Error("Unable to load analytics");
+      return response.json();
+    },
+  });
+  return <div className="py-6 space-y-5"><SheetHeader><SheetTitle>{set.title} analytics</SheetTitle><SheetDescription>Performance for this AI-generated custom test.</SheetDescription></SheetHeader>
+    {isLoading && <p className="text-sm text-muted-foreground">Loading analytics…</p>}
+    {error && <p className="text-sm text-destructive">Unable to load analytics.</p>}
+    {data && <><div className="grid grid-cols-2 gap-3">{[["Attempts", data.totalAttempts], ["Avg score", data.avgScore], ["Accuracy", `${data.avgAccuracy}%`], ["Best score", data.bestScore]].map(([label, value]) => <div key={String(label)} className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-bold mt-1">{value}</p></div>)}</div><div className="rounded-lg border p-4 space-y-3"><h3 className="font-semibold">Score distribution</h3>{data.scoreDistribution.map((item: any) => <div key={item.range} className="flex justify-between text-sm"><span>{item.range}</span><span className="font-semibold">{item.count}</span></div>)}</div><div className="rounded-lg border p-4"><h3 className="font-semibold mb-3">Top scorers</h3>{data.topScorers.length ? data.topScorers.map((item: any) => <div key={item.userId} className="flex justify-between text-sm py-1"><span>{item.name}</span><span className="font-semibold">{item.score}</span></div>) : <p className="text-sm text-muted-foreground">No attempts yet.</p>}</div></>}
+  </div>;
 }

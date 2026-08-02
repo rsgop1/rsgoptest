@@ -1282,6 +1282,11 @@ router.get("/custom-sets", requireAuth, async (_req: Request, res: Response) => 
         createdAt: userCustomSetsTable.createdAt,
         completedAt: userCustomSetsTable.completedAt,
         questionsData: userCustomSetsTable.questionsData,
+        priceInr: userCustomSetsTable.priceInr,
+        priceInStars: userCustomSetsTable.priceInStars,
+        timerSeconds: userCustomSetsTable.timerSeconds,
+        positiveMarking: userCustomSetsTable.positiveMarking,
+        negativeMarking: userCustomSetsTable.negativeMarking,
         fullName: usersTable.fullName,
         username: usersTable.username,
       })
@@ -1297,6 +1302,65 @@ router.get("/custom-sets", requireAuth, async (_req: Request, res: Response) => 
   } catch (err) {
     logger.error({ err }, "admin custom-sets list failed");
     res.status(500).json({ error: "Failed to list custom sets" });
+  }
+});
+
+router.put("/custom-sets/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid custom set id" }); return; }
+    const body = req.body as Record<string, unknown>;
+    const updates: Record<string, unknown> = {};
+    if (typeof body.title === "string" && body.title.trim()) updates.title = body.title.trim().slice(0, 100);
+    if (body.language === "en" || body.language === "hi") updates.language = body.language;
+    for (const key of ["priceInr", "priceInStars", "timerSeconds", "positiveMarking", "negativeMarking"]) {
+      if (body[key] !== undefined) {
+        const value = Number(body[key]);
+        if (!Number.isFinite(value) || value < 0) { res.status(400).json({ error: `Invalid ${key}` }); return; }
+        updates[key] = value;
+      }
+    }
+    if (typeof body.isActive === "boolean") updates.isActive = body.isActive;
+    if (!Object.keys(updates).length) { res.status(400).json({ error: "No editable fields supplied" }); return; }
+    const [updated] = await db.update(userCustomSetsTable).set(updates).where(eq(userCustomSetsTable.id, id)).returning();
+    if (!updated) { res.status(404).json({ error: "Custom set not found" }); return; }
+    res.json(updated);
+  } catch (err) {
+    logger.error({ err }, "admin custom-set update failed");
+    res.status(500).json({ error: "Failed to update custom set" });
+  }
+});
+
+router.get("/custom-sets/:id/analytics", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    const [set] = await db.select().from(userCustomSetsTable).where(eq(userCustomSetsTable.id, id)).limit(1);
+    if (!set) { res.status(404).json({ error: "Custom set not found" }); return; }
+    const history = await db.select().from(userHistoryTable).where(eq(userHistoryTable.testId, `custom_${id}`));
+    const totalAttempts = history.length;
+    const avgScore = totalAttempts ? history.reduce((sum, row) => sum + row.score, 0) / totalAttempts : 0;
+    const avgAccuracy = totalAttempts ? history.reduce((sum, row) => sum + row.accuracy, 0) / totalAttempts : 0;
+    const bestScore = totalAttempts ? Math.max(...history.map((row) => row.score)) : 0;
+    const maxPossible = set.questionCount * Number(set.positiveMarking);
+    const buckets = [0, 0, 0, 0, 0];
+    for (const row of history) {
+      const bucket = Math.min(4, Math.max(0, Math.floor(((maxPossible ? row.score / maxPossible : 0) * 100) / 20)));
+      buckets[bucket]++;
+    }
+    const userBest = new Map<number, number>();
+    for (const row of history) userBest.set(row.userId, Math.max(userBest.get(row.userId) ?? -Infinity, row.score));
+    const topScorers = await Promise.all([...userBest.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(async ([userId, score]) => {
+      const [user] = await db.select({ fullName: usersTable.fullName }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+      return { userId, score, name: user?.fullName ?? String(userId) };
+    }));
+    res.json({
+      setId: id, testId: `custom_${id}`, testName: set.title, totalAttempts,
+      avgScore: Number(avgScore.toFixed(2)), avgAccuracy: Number(avgAccuracy.toFixed(1)), bestScore, topScorers,
+      scoreDistribution: ["0–20%", "20–40%", "40–60%", "60–80%", "80–100%"].map((range, index) => ({ range, count: buckets[index] })),
+    });
+  } catch (err) {
+    logger.error({ err }, "custom-set analytics failed");
+    res.status(500).json({ error: "Failed to load custom set analytics" });
   }
 });
 

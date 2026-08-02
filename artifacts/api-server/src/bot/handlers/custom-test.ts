@@ -495,6 +495,11 @@ export function registerCustomTestHandlers(bot: Bot): void {
         language,
         questionCount,
         questionsData: [],
+        priceInr: 0,
+        priceInStars: 0,
+        timerSeconds: 30,
+        positiveMarking: 1,
+        negativeMarking: 0,
         status: "processing",
         shareToken,
         sourceFileName: fileName,
@@ -558,14 +563,14 @@ export function registerCustomTestHandlers(bot: Bot): void {
       .where(eq(userCustomSetsTable.id, setId))
       .limit(1);
 
-    if (!set || set.status !== "ready") {
+    if (!set || set.status !== "ready" || !set.isActive) {
       await ctx.reply("❌ Test set not ready yet. Please wait for processing to complete.");
       return;
     }
 
     const kb = new InlineKeyboard().text("🚀 Start Test", `customset_begin_${set.id}`).row().text("📂 My Sets", "my_custom_sets");
     await ctx.reply(
-      `📋 ${set.title}\n\n📝 Questions: ${set.questionCount}\n⏱️ Timer: 30 seconds per question\n➕ Correct: +1   ➖ Wrong: -0.25\n🤖 Generated from your PDF\n\nTap Start Test to begin.`,
+      `📋 ${set.title}\n\n📝 Questions: ${set.questionCount}\n⏱️ Timer: ${set.timerSeconds} seconds per question\n➕ Correct: +${set.positiveMarking}   ➖ Wrong: -${set.negativeMarking}\n💵 ${set.priceInr > 0 ? `₹${set.priceInr}` : set.priceInStars > 0 ? `${set.priceInStars}⭐` : "Free"}\n🤖 Generated from your PDF\n\nTap Start Test to begin.`,
       { reply_markup: kb },
     );
   });
@@ -575,7 +580,7 @@ export function registerCustomTestHandlers(bot: Bot): void {
     const setId = parseInt(ctx.callbackQuery.data.replace("customset_begin_", ""), 10);
     const userId = ctx.from.id;
     const [set] = await db.select().from(userCustomSetsTable).where(eq(userCustomSetsTable.id, setId)).limit(1);
-    if (!set || set.status !== "ready") {
+    if (!set || set.status !== "ready" || !set.isActive) {
       await ctx.reply("❌ Test set not ready yet.");
       return;
     }
@@ -600,13 +605,14 @@ export function registerCustomTestHandlers(bot: Bot): void {
     const pending = getSession(ctx.from.id).pendingCustomPractice;
     if (!pending || pending.setId !== setId || pending.awaiting !== "count") return;
     updateSession(ctx.from.id, { pendingCustomPractice: { ...pending, timerSeconds, awaiting: "count" } });
-    const kb = new InlineKeyboard()
-      .text("10", `customset_count_${setId}_10`)
-      .text("20", `customset_count_${setId}_20`)
-      .text("30", `customset_count_${setId}_30`)
-      .row()
-      .text("All", `customset_count_${setId}_all`)
-      .text("Cancel", "customset_cancel_practice");
+    const counts = [...new Set([5, 10, 20, 30, pending.totalQuestions])]
+      .filter((count) => count > 0 && count <= pending.totalQuestions);
+    const kb = new InlineKeyboard();
+    counts.forEach((count, index) => {
+      kb.text(String(count), `customset_count_${setId}_${count}`);
+      if ((index + 1) % 3 === 0) kb.row();
+    });
+    kb.row().text("All", `customset_count_${setId}_all`).text("Cancel", "customset_cancel_practice");
     await ctx.reply(
       `🔢 How many questions do you want to attempt?\n\nTotal available: ${pending.totalQuestions}`,
       { reply_markup: kb },
@@ -626,7 +632,7 @@ export function registerCustomTestHandlers(bot: Bot): void {
       return;
     }
     const [set] = await db.select().from(userCustomSetsTable).where(eq(userCustomSetsTable.id, setId)).limit(1);
-    if (!set || set.status !== "ready") { await ctx.reply("❌ Test set is no longer available."); return; }
+    if (!set || set.status !== "ready" || !set.isActive) { await ctx.reply("❌ Test set is no longer available."); return; }
     updateSession(ctx.from.id, { pendingCustomPractice: undefined });
     const { startQuizForUser } = await import("./quiz.js");
     await startQuizForUser(ctx.from.id, {
@@ -634,8 +640,8 @@ export function registerCustomTestHandlers(bot: Bot): void {
       testName: set.title,
       questionsData: set.questionsData,
       timerSeconds: pending.timerSeconds ?? 30,
-      positiveMarking: 1,
-      negativeMarking: 0.25,
+      positiveMarking: set.positiveMarking,
+      negativeMarking: set.negativeMarking,
     }, true, pending.timerSeconds ?? 30, pending.startQuestion, count);
   });
 

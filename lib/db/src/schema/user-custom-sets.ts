@@ -1,4 +1,4 @@
-import { pgTable, serial, bigint, text, integer, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigint, text, integer, doublePrecision, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -9,6 +9,11 @@ export const userCustomSetsTable = pgTable("user_custom_sets", {
   language: text("language").notNull().default("en"), // "en" | "hi"
   questionCount: integer("question_count").notNull().default(0),
   questionsData: jsonb("questions_data").notNull().default([]),
+  priceInr: integer("price_inr").notNull().default(0),
+  priceInStars: integer("price_in_stars").notNull().default(0),
+  timerSeconds: integer("timer_seconds").notNull().default(30),
+  positiveMarking: doublePrecision("positive_marking").notNull().default(1),
+  negativeMarking: doublePrecision("negative_marking").notNull().default(0),
   status: text("status").notNull().default("processing"), // "processing" | "ready" | "failed"
   shareToken: text("share_token").notNull().unique(),
   failReason: text("fail_reason"),
