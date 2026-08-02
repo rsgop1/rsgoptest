@@ -14,6 +14,7 @@ import Reports from "./pages/reports";
 import LiveTests from "./pages/live-tests";
 import Ai from "./pages/ai";
 import CustomSets from "./pages/custom-sets";
+import Support from "./pages/support";
 
 function AppRoutes() {
   return (
@@ -42,6 +43,9 @@ function AppRoutes() {
       </Route>
       <Route path="/reports">
         <Layout><Reports /></Layout>
+      </Route>
+      <Route path="/support">
+        <Layout><Support /></Layout>
       </Route>
       <Route path="/live-tests">
         <Layout><LiveTests /></Layout>

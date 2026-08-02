@@ -120,7 +120,42 @@ export interface AdminUser {
   joinedAt: string;
 }
 
+export interface SupportTicket {
+  id: number;
+  userId: number;
+  category: string;
+  message: string;
+  status: string;
+  priority: string;
+  /** @nullable */
+  adminNote?: string | null;
+  /** @nullable */
+  resolvedBy?: number | null;
+  createdAt: string;
+  updatedAt: string;
+  /** @nullable */
+  fullName?: string | null;
+  /** @nullable */
+  username?: string | null;
+  /** @nullable */
+  tier?: string | null;
+}
+
+export interface SupportTicketUpdate {
+  status?: string;
+  priority?: string;
+  /** @nullable */
+  adminNote?: string | null;
+}
+
 export type AdminListPaymentsParams = {
 status?: string;
+};
+
+export type AdminListSupportTicketsParams = {
+status?: string;
+category?: string;
+priority?: string;
+search?: string;
 };
 

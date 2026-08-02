@@ -82,6 +82,57 @@ export const AdminListPaymentsResponse = zod.array(AdminListPaymentsResponseItem
 
 
 /**
+ * @summary List support tickets
+ */
+export const adminListSupportTicketsQueryStatusDefault = `all`;
+export const adminListSupportTicketsQueryCategoryDefault = `all`;
+export const adminListSupportTicketsQueryPriorityDefault = `all`;
+
+export const AdminListSupportTicketsQueryParams = zod.object({
+  "status": zod.coerce.string().default(adminListSupportTicketsQueryStatusDefault),
+  "category": zod.coerce.string().default(adminListSupportTicketsQueryCategoryDefault),
+  "priority": zod.coerce.string().default(adminListSupportTicketsQueryPriorityDefault),
+  "search": zod.coerce.string().optional()
+})
+
+export const AdminListSupportTicketsResponseItem = zod.object({
+  "id": zod.number(),
+  "userId": zod.number(),
+  "category": zod.string(),
+  "message": zod.string(),
+  "status": zod.string(),
+  "priority": zod.string(),
+  "adminNote": zod.string().nullish(),
+  "resolvedBy": zod.number().nullish(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "fullName": zod.string().nullish(),
+  "username": zod.string().nullish(),
+  "tier": zod.string().nullish()
+})
+export const AdminListSupportTicketsResponse = zod.array(AdminListSupportTicketsResponseItem)
+
+
+/**
+ * @summary Update support ticket
+ */
+export const AdminUpdateSupportTicketParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const AdminUpdateSupportTicketBody = zod.object({
+  "status": zod.string().optional(),
+  "priority": zod.string().optional(),
+  "adminNote": zod.string().nullish()
+})
+
+export const AdminUpdateSupportTicketResponse = zod.object({
+  "success": zod.boolean(),
+  "message": zod.string()
+})
+
+
+/**
  * @summary Approve a payment
  */
 export const AdminApprovePaymentParams = zod.object({

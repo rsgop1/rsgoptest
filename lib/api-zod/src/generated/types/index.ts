@@ -8,6 +8,7 @@
 
 export * from './adminAuthResult';
 export * from './adminListPaymentsParams';
+export * from './adminListSupportTicketsParams';
 export * from './adminLoginInput';
 export * from './adminSettings';
 export * from './adminUser';
@@ -19,5 +20,7 @@ export * from './flashSaleInput';
 export * from './healthStatus';
 export * from './payment';
 export * from './successResult';
+export * from './supportTicket';
+export * from './supportTicketUpdate';
 export * from './testSeries';
 export * from './testSeriesInput';

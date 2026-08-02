@@ -11,3 +11,4 @@
 - [Custom test MarkdownV2 gotchas](custom-test-markdownv2.md) — `=` inside `_..._` must be `\\=`, silent failures via bot.catch, prefer editMessageText over delete+reply.
 - [PDF-grounded AI and tutor flow](pdf-ai-tutor-flow.md) — binary PDF bytes are not text; use real extraction, publish command menus, and handle tutor follow-up state.
 - [Bot AI, support, and profile flows](bot-ai-and-support.md) — centralize OpenRouter usage and prefer plain text for dynamic Telegram confirmations.
+- [Admin support workspace](admin-support-workspace.md) — `/support` is the real support_tickets inbox; keep it separate from question reports.

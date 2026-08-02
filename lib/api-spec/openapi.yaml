@@ -13,6 +13,7 @@ tags:
   - name: admin-payments
   - name: admin-tests
   - name: admin-settings
+  - name: admin-support
 paths:
   /healthz:
     get:
@@ -108,6 +109,58 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Payment"
+
+  /admin/support-tickets:
+    get:
+      operationId: adminListSupportTickets
+      tags: [admin-support]
+      summary: List support tickets
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, default: all }
+        - in: query
+          name: category
+          schema: { type: string, default: all }
+        - in: query
+          name: priority
+          schema: { type: string, default: all }
+        - in: query
+          name: search
+          schema: { type: string }
+      responses:
+        "200":
+          description: Support ticket list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SupportTicket"
+
+  /admin/support-tickets/{id}:
+    patch:
+      operationId: adminUpdateSupportTicket
+      tags: [admin-support]
+      summary: Update support ticket
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupportTicketUpdate"
+      responses:
+        "200":
+          description: Ticket updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResult"
 
   /admin/payments/{paymentId}/approve:
     post:
@@ -560,3 +613,26 @@ components:
           type: integer
         joinedAt:
           type: string
+    SupportTicket:
+      type: object
+      required: [id, userId, category, message, status, priority, createdAt, updatedAt]
+      properties:
+        id: { type: integer }
+        userId: { type: integer }
+        category: { type: string }
+        message: { type: string }
+        status: { type: string }
+        priority: { type: string }
+        adminNote: { type: ["string", "null"] }
+        resolvedBy: { type: ["integer", "null"] }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        fullName: { type: ["string", "null"] }
+        username: { type: ["string", "null"] }
+        tier: { type: ["string", "null"] }
+    SupportTicketUpdate:
+      type: object
+      properties:
+        status: { type: string }
+        priority: { type: string }
+        adminNote: { type: ["string", "null"] }

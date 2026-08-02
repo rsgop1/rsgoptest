@@ -14,6 +14,7 @@ import {
   achievementsTable,
   couponCodesTable,
   userCustomSetsTable,
+  supportTicketsTable,
 } from "@workspace/db";
 import { eq, and, count, gte, sql, desc, gt, lt, inArray } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
@@ -705,6 +706,83 @@ router.get("/reports", requireAuth, async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "Admin reports error");
     res.status(500).json({ error: "Failed to load reports" });
+  }
+});
+
+// ── SUPPORT TICKETS ─────────────────────────────────────────────────────────
+router.get("/support-tickets", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const status = String(req.query["status"] ?? "all");
+    const category = String(req.query["category"] ?? "all");
+    const priority = String(req.query["priority"] ?? "all");
+    const search = String(req.query["search"] ?? "").trim();
+    const filters = [];
+    if (status !== "all") filters.push(eq(supportTicketsTable.status, status));
+    if (category !== "all") filters.push(eq(supportTicketsTable.category, category));
+    if (priority !== "all") filters.push(eq(supportTicketsTable.priority, priority));
+    if (search) {
+      const numericUser = Number(search);
+      filters.push(Number.isFinite(numericUser) && search === String(numericUser)
+        ? sql`(${supportTicketsTable.message} ILIKE ${`%${search}%`} OR ${supportTicketsTable.userId} = ${numericUser} OR CAST(${supportTicketsTable.id} AS TEXT) = ${search})`
+        : sql`(${supportTicketsTable.message} ILIKE ${`%${search}%`} OR CAST(${supportTicketsTable.id} AS TEXT) = ${search})`);
+    }
+    const rows = await db
+      .select({
+        id: supportTicketsTable.id,
+        userId: supportTicketsTable.userId,
+        category: supportTicketsTable.category,
+        message: supportTicketsTable.message,
+        status: supportTicketsTable.status,
+        priority: supportTicketsTable.priority,
+        adminNote: supportTicketsTable.adminNote,
+        resolvedBy: supportTicketsTable.resolvedBy,
+        createdAt: supportTicketsTable.createdAt,
+        updatedAt: supportTicketsTable.updatedAt,
+        fullName: usersTable.fullName,
+        username: usersTable.username,
+        tier: usersTable.tier,
+      })
+      .from(supportTicketsTable)
+      .leftJoin(usersTable, eq(supportTicketsTable.userId, usersTable.userId))
+      .where(filters.length ? and(...filters) : undefined)
+      .orderBy(desc(supportTicketsTable.updatedAt), desc(supportTicketsTable.createdAt))
+      .limit(250);
+    res.json(rows.map((row) => ({
+      ...row,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    })));
+  } catch (err) {
+    logger.error({ err }, "Admin support tickets error");
+    res.status(500).json({ error: "Failed to load support tickets" });
+  }
+});
+
+router.patch("/support-tickets/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params["id"]);
+    const body = req.body as { status?: string; priority?: string; adminNote?: string | null };
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (body.status && ["open", "in_progress", "resolved", "closed"].includes(body.status)) updates.status = body.status;
+    if (body.priority && ["low", "normal", "high", "urgent"].includes(body.priority)) updates.priority = body.priority;
+    if (body.adminNote !== undefined) updates.adminNote = body.adminNote?.trim() || null;
+    if (updates.status === "resolved" || updates.status === "closed") updates.resolvedBy = 0;
+    await db.update(supportTicketsTable).set(updates).where(eq(supportTicketsTable.id, id));
+    const [ticket] = await db.select().from(supportTicketsTable).where(eq(supportTicketsTable.id, id)).limit(1);
+    if (!ticket) { res.status(404).json({ error: "Ticket not found" }); return; }
+    if (body.status === "resolved" || body.status === "closed") {
+      try {
+        await getApi().sendMessage(ticket.userId,
+          `Support ticket #${ticket.id} has been marked ${body.status}.` +
+          (body.adminNote?.trim() ? `\n\nAdmin note: ${body.adminNote.trim()}` : ""));
+      } catch (notifyErr) {
+        logger.warn({ err: notifyErr, ticketId: id }, "Could not notify ticket user");
+      }
+    }
+    res.json({ success: true, ticket: { ...ticket, createdAt: ticket.createdAt.toISOString(), updatedAt: ticket.updatedAt.toISOString() } });
+  } catch (err) {
+    logger.error({ err }, "Admin update support ticket error");
+    res.status(500).json({ error: "Failed to update support ticket" });
   }
 });
 
