@@ -14,6 +14,7 @@ import {
 } from "../keyboards.js";
 import { getSession, updateSession } from "../session.js";
 import { handleChallengeStart } from "./challenge.js";
+import { handleCustomSetDeepLink } from "./custom-test.js";
 import { getConfig } from "./helpers.js";
 import { trySetGroupTitles } from "./achievements.js";
 import { logger } from "../../lib/logger.js";
@@ -30,13 +31,18 @@ Your exam preparation, automated and supercharged\\.
 👇 Select your main exam category below:`;
 
 function dashboardMsg(name: string, sub: string, tier: string, refLink: string): string {
+  const premiumLine = tier === "Premium"
+    ? "💎 *Premium*"
+    : "🆓 Free — /premium to upgrade";
   return `👋 *Welcome back, ${escMd(name)}\\!*
 
 🎯 Target: *${escMd(sub)}*
-💎 Tier: *${escMd(tier === "Premium" ? "💎 Premium" : "🆓 Free")}*
+🏅 Tier: ${premiumLine}
 
-📚 Commands:
+📚 *Commands:*
 /test\\_series — Browse & start mock tests
+/createtest — 🧪 Create test from your PDF \\(Premium\\)
+/mysets — 📂 View your custom test sets
 /leaderboard — Top performers ranking
 /stats — Your performance analytics
 /notebook — Practice wrong questions
@@ -44,7 +50,6 @@ function dashboardMsg(name: string, sub: string, tier: string, refLink: string):
 /premium — Upgrade to Premium
 /doubt — AI Doubt Solver
 /anon — Post anonymous doubt in group
-/myid — Get Telegram file IDs \\(for admins\\)
 
 👥 *Your Referral Link:*
 \`${escMd(refLink)}\``;
@@ -140,6 +145,13 @@ export function registerStartHandlers(bot: Bot): void {
           `✅ *Joined Live Test\\!*\n\n📝 *${escMd(liveTest.title)}*\n⏰ Starts: *${escMd(schedTime)} IST*\n\n_Questions will be sent to your DM automatically when the test begins\\. Stay tuned\\!_ 🎯`,
           { parse_mode: "MarkdownV2" }
         );
+        return;
+      }
+
+      if (param.startsWith("customset_")) {
+        const shareToken = param.replace("customset_", "");
+        await upsertUser(from.id, from.first_name, from.last_name, from.username);
+        await handleCustomSetDeepLink(from.id, shareToken);
         return;
       }
 

@@ -11,6 +11,7 @@ import { registerAchievementHandlers } from "./handlers/achievements.js";
 import { registerAnonDoubtHandlers } from "./handlers/anon-doubt.js";
 import { registerLiveTestHandlers, startLiveTestScheduler } from "./handlers/live-test.js";
 import { registerGroupQuizHandlers } from "./handlers/group-quiz.js";
+import { registerCustomTestHandlers } from "./handlers/custom-test.js";
 import { logger } from "../lib/logger.js";
 import { emitTelemetry } from "../lib/telemetry.js";
 
@@ -33,6 +34,7 @@ registerAchievementHandlers(bot);
 registerAnonDoubtHandlers(bot);
 registerLiveTestHandlers(bot);
 registerGroupQuizHandlers(bot);
+registerCustomTestHandlers(bot);
 
 bot.callbackQuery("ad_noop", async (ctx) => {
   await ctx.answerCallbackQuery({ text: "⏳ Please wait for the timer...", show_alert: false });

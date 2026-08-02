@@ -80,6 +80,11 @@ export interface UserSession {
     awaiting: "start" | "count";
   };
   pendingFileIdMode?: boolean;
+  pendingCustomTest?: {
+    step: "awaiting_language" | "awaiting_count" | "awaiting_pdf";
+    language?: "en" | "hi";
+    questionCount?: number;
+  };
   pendingCoupon?: PendingCoupon;
   awaitingCouponInput?: boolean;
   pendingPypTestId?: string;

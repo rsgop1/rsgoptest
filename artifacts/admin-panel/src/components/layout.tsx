@@ -33,6 +33,7 @@ const navItems = [
   { href: "/reports", label: "Reports", icon: Flag },
   { href: "/live-tests", label: "Live Tests", icon: Radio },
   { href: "/users", label: "Users", icon: Users },
+  { href: "/custom-sets", label: "AI Custom Sets", icon: Brain },
   { href: "/ai", label: "AI & Coupons", icon: Brain },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/telemetry", label: "Live Terminal", icon: Terminal },
@@ -68,7 +69,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const queryClient = useQueryClient();
 
-  const { data: user, isLoading, isError } = useAdminGetMe({ query: { retry: false, staleTime: 30_000 } });
+  const { data: user, isLoading, isError } = useAdminGetMe({ query: { retry: false, staleTime: 30_000, queryKey: getAdminGetMeQueryKey() } });
 
   const logoutMutation = useAdminLogout({
     mutation: {

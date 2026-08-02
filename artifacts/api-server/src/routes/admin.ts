@@ -13,6 +13,7 @@ import {
   liveTestsTable,
   achievementsTable,
   couponCodesTable,
+  userCustomSetsTable,
 } from "@workspace/db";
 import { eq, and, count, gte, sql, desc, gt, lt, inArray } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
@@ -1177,6 +1178,49 @@ router.post("/import/all", requireAuth, async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "Import all failed");
     res.status(500).json({ error: "Failed to import data" });
+  }
+});
+
+// ── CUSTOM TEST SETS ───────────────────────────────────────────────────────────
+router.get("/custom-sets", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const sets = await db
+      .select({
+        id: userCustomSetsTable.id,
+        userId: userCustomSetsTable.userId,
+        title: userCustomSetsTable.title,
+        language: userCustomSetsTable.language,
+        questionCount: userCustomSetsTable.questionCount,
+        status: userCustomSetsTable.status,
+        shareToken: userCustomSetsTable.shareToken,
+        failReason: userCustomSetsTable.failReason,
+        sourceFileName: userCustomSetsTable.sourceFileName,
+        isActive: userCustomSetsTable.isActive,
+        createdAt: userCustomSetsTable.createdAt,
+        completedAt: userCustomSetsTable.completedAt,
+        fullName: usersTable.fullName,
+        username: usersTable.username,
+      })
+      .from(userCustomSetsTable)
+      .leftJoin(usersTable, eq(userCustomSetsTable.userId, usersTable.userId))
+      .orderBy(desc(userCustomSetsTable.createdAt))
+      .limit(200);
+    res.json(sets);
+  } catch (err) {
+    logger.error({ err }, "admin custom-sets list failed");
+    res.status(500).json({ error: "Failed to list custom sets" });
+  }
+});
+
+router.delete("/custom-sets/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const idParam = req.params["id"];
+    const id = parseInt(Array.isArray(idParam) ? idParam[0]! : idParam!, 10);
+    await db.update(userCustomSetsTable).set({ isActive: false }).where(eq(userCustomSetsTable.id, id));
+    res.json({ success: true });
+  } catch (err) {
+    logger.error({ err }, "admin custom-set delete failed");
+    res.status(500).json({ error: "Failed to delete custom set" });
   }
 });
 

@@ -13,6 +13,7 @@ import Telemetry from "./pages/telemetry";
 import Reports from "./pages/reports";
 import LiveTests from "./pages/live-tests";
 import Ai from "./pages/ai";
+import CustomSets from "./pages/custom-sets";
 
 function AppRoutes() {
   return (
@@ -56,6 +57,9 @@ function AppRoutes() {
       </Route>
       <Route path="/ai">
         <Layout><Ai /></Layout>
+      </Route>
+      <Route path="/custom-sets">
+        <Layout><CustomSets /></Layout>
       </Route>
       <Route>
         <Layout><div className="flex items-center justify-center h-[50vh] text-2xl font-bold text-muted-foreground">Page Not Found</div></Layout>
