@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { db } from "@workspace/db";
-import { usersTable, testSeriesTable, purchasedTestsTable, liveTestsTable } from "@workspace/db";
+import { usersTable, testSeriesTable, purchasedTestsTable, liveTestsTable, userHistoryTable, wrongQuestionsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import {
   mainCategoryKeyboard,
@@ -245,10 +245,29 @@ export function registerStartHandlers(bot: Bot): void {
         if (referredBy) {
           await ctx.reply(`🎉 You joined via a referral link\\!\n\nWelcome to *Series TestPro\\!*`, { parse_mode: "MarkdownV2" });
         }
+
+        // Enhanced welcome sequence — slide 1: category selection
         await ctx.reply(WELCOME_MSG, { parse_mode: "MarkdownV2", reply_markup: mainCategoryKeyboard() });
+
+        // Slide 2: premium trial
         await ctx.reply(
-          `🎁 *1\\-Day Premium Trial Activated\\!*\n\nWelcome gift from Series TestPro 🎉\n\n✅ All tests unlocked for 24 hours\n✅ AI Info enabled\n✅ No ads\n✅ Custom timer\n\n_Trial expires in 24 hours\\. Use /premium to keep access\\._`,
+          `🎁 *1\\-Day Premium Trial Activated\\!*\n\nWelcome gift from Series TestPro 🎉\n\n✅ All tests unlocked for 24 hours\n✅ AI Info enabled\n✅ No ads\n✅ Custom timer\n✅ AI Doubt Solver unlimited\n\n_Trial expires in 24 hours\\. Use /premium to keep access\\._`,
           { parse_mode: "MarkdownV2" }
+        );
+
+        // Slide 3: quick commands overview
+        const startKb = new InlineKeyboard()
+          .text("📚 Browse Tests", "go_test_series")
+          .text("🧪 Create Custom Test", "ctest_entry");
+        await ctx.reply(
+          `🚀 *Ready to Start\\!*\n\n` +
+          `Here's what you can do right now:\n\n` +
+          `📚 /test\\_series — Browse all tests\n` +
+          `🎯 /createtest — Create test from PDF \\(Premium\\)\n` +
+          `🤖 /ai\\_tutor — AI doubt solver\n` +
+          `📊 /stats — Track your progress\n\n` +
+          `_Select an option below or use commands anytime\\._`,
+          { parse_mode: "MarkdownV2", reply_markup: startKb }
         );
       } else {
         const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, from.id)).limit(1);
@@ -283,6 +302,167 @@ export function registerStartHandlers(bot: Bot): void {
   bot.callbackQuery("cat_back_main", async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(WELCOME_MSG, { parse_mode: "MarkdownV2", reply_markup: mainCategoryKeyboard() });
+  });
+
+  //
+  // /dashboard — single-message edit with profile, stats & wallet
+  //
+  bot.command("dashboard", async (ctx) => {
+    try {
+      const userId = ctx.from!.id;
+      const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+      if (!user) {
+        await ctx.reply("❌ Profile not found. Send /start first.");
+        return;
+      }
+
+      const botUsername = ctx.me.username ?? "gt_testprobot";
+      const refLink = `https://t.me/${botUsername}?start=ref_${userId}`;
+      const tierLabel = user.tier === "Premium" ? "💎 Premium" : "🆓 Free";
+      const sub = user.targetExamSub ?? "Not set";
+
+      const historyCount = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(userHistoryTable)
+        .where(eq(userHistoryTable.userId, userId))
+        .then(r => r[0]?.count ?? 0);
+
+      const avgAccuracy = await db
+        .select({
+          acc: sql<number>`COALESCE(ROUND(AVG(accuracy)::numeric, 1), 0)::float`,
+        })
+        .from(userHistoryTable)
+        .where(eq(userHistoryTable.userId, userId))
+        .then(r => r[0]?.acc ?? 0);
+
+      const wrongCount = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(wrongQuestionsTable)
+        .where(eq(wrongQuestionsTable.userId, userId))
+        .then(r => r[0]?.count ?? 0);
+
+      const aiLimit = user.tier === "Premium" ? "♾️ Unlimited" : `2/day (used: ${user.aiDoubtCount ?? 0})`;
+      const coins = user.referralCount ?? 0;
+
+      const dashKb = new InlineKeyboard()
+        .text("📚 Test Series", "go_test_series")
+        .text("📊 Stats", "dash_stats")
+        .row()
+        .text("🤖 AI Tutor", "dash_ai")
+        .text("🧪 Create Test", "ctest_entry")
+        .row()
+        .text("👥 Referral", "dash_ref")
+        .text(tierLabel.includes("Premium") ? "⚙️ Account" : "💎 Upgrade", tierLabel.includes("Premium") ? "dash_account" : "premium_upi");
+
+      await ctx.reply(
+        `👋 *${escMd(ctx.from!.first_name)}'s Dashboard*\n\n` +
+        `🎯 *${escMd(sub)}*  •  ${tierLabel}\n\n` +
+        `📝 Tests Attempted: *${historyCount}*\n` +
+        `🎯 Avg\\. Accuracy: *${avgAccuracy}%*\n` +
+        `📓 Wrong Q\\. in Notebook: *${wrongCount}*\n` +
+        `🤖 AI Doubts: *${aiLimit}*\n` +
+        `🪙 Referral Coins: *${coins}*\n\n` +
+        `👥 *Your Referral Link:*\n\`${escMd(refLink)}\``,
+        { parse_mode: "MarkdownV2", reply_markup: dashKb }
+      );
+    } catch (err) {
+      logger.error({ err }, "/dashboard error");
+      await ctx.reply("❌ Error loading dashboard.");
+    }
+  });
+
+  // Dashboard sub-actions
+  bot.callbackQuery("dash_stats", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    ctx.match = ""; // dummy so /stats can reuse
+    // Forward to stats
+    const { registerStatsHandlers } = await import("./stats.js");
+    await ctx.reply("📊 Tap /stats to view detailed analytics.", { parse_mode: "MarkdownV2" });
+  });
+
+  bot.callbackQuery("dash_ai", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.reply("🤖 Tap /doubt to ask AI or use /ai_tutor for a dedicated AI session.", { parse_mode: "MarkdownV2" });
+  });
+
+  bot.callbackQuery("dash_ref", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const userId = ctx.from.id;
+    const botUsername = ctx.me.username ?? "gt_testprobot";
+    const refLink = `https://t.me/${botUsername}?start=ref_${userId}`;
+    await ctx.reply(
+      `👥 *Refer & Earn*\n\nShare your link and earn rewards\\!\n\n🔗 \`${escMd(refLink)}\`\n\n_When someone joins via your link, you get Referral Coins!\\._`,
+      { parse_mode: "MarkdownV2" }
+    );
+  });
+
+  //
+  // /ai_tutor — dedicated AI doubt solver session
+  //
+  bot.command("ai_tutor", async (ctx) => {
+    const userId = ctx.from!.id;
+    const [user] = await db.select({ tier: usersTable.tier, aiDoubtCount: usersTable.aiDoubtCount, aiDoubtDate: usersTable.aiDoubtDate }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+
+    if (!user) {
+      await ctx.reply("❌ Please /start first.");
+      return;
+    }
+
+    // Check daily limit for free users
+    if (user.tier !== "Premium") {
+      const today = new Date().toISOString().slice(0, 10);
+      const lastDate = user.aiDoubtDate ?? "";
+      const count = lastDate === today ? (user.aiDoubtCount ?? 0) : 0;
+
+      if (count >= 2) {
+        const kb = new InlineKeyboard().text("💎 Upgrade to Premium", "premium_upi");
+        await ctx.reply(
+          "🤖 *AI Tutor — Daily Limit Reached*\n\n" +
+          "Free users get *2 AI doubts per day*\\.\nYou've used all your doubts for today\\!\n\n" +
+          "💎 Upgrade to Premium for unlimited AI access\\.",
+          { parse_mode: "MarkdownV2", reply_markup: kb }
+        );
+        return;
+      }
+    }
+
+    await ctx.reply(
+      `🧠 *AI Tutor* — Your Personal Study Assistant\n\n` +
+      `Ask me anything about your exam preparation\\!\n\n` +
+      `I can help with:\n` +
+      `📖 Concept explanations\n` +
+      `🔍 Doubt solving from any topic\n` +
+      `📝 Practice question generation\n` +
+      `💡 Study tips & strategies\n\n` +
+      `_Type your question below or use /doubt <question>_\n` +
+      (user.tier !== "Premium" ? `_Free: 2 doubts/day — Upgrade to Premium for unlimited_\n` : `_♾️ Unlimited for Premium users_\n`) +
+      `_Send /cancel to stop_`,
+      { parse_mode: "MarkdownV2" }
+    );
+  });
+
+  // ctest_entry — entry to custom test creation
+  bot.callbackQuery("ctest_entry", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const userId = ctx.from.id;
+    const [user] = await db.select({ tier: usersTable.tier }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    if (user?.tier === "Premium") {
+      const { getSession, updateSession } = await import("../session.js");
+      updateSession(userId, { pendingCustomTest: { step: "awaiting_language" } });
+      try { await ctx.deleteMessage(); } catch {}
+      const kb = new InlineKeyboard()
+        .text("🇮🇳 Hindi", "ctest_lang_hi").text("🇬🇧 English", "ctest_lang_en").row()
+        .text("❌ Cancel", "ctest_cancel");
+      await ctx.reply(
+        "🧪 *Create Your Own Test*\n\nUpload any PDF and AI will generate a custom test for you\\!\n\n*Step 1 of 3:* Choose the language:",
+        { parse_mode: "MarkdownV2", reply_markup: kb }
+      );
+    } else {
+      await ctx.reply(
+        "🔒 *Premium Feature*\n\nUpload any PDF and AI will generate a personalized test\\!\n👉 Use /premium to upgrade\\!",
+        { parse_mode: "MarkdownV2" }
+      );
+    }
   });
 
   bot.callbackQuery(/^cat_sub_/, async (ctx) => {

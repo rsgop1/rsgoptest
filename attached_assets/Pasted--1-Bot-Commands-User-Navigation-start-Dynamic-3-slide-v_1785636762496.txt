@@ -1,0 +1,39 @@
+### 🤖 1. Bot Commands (User Navigation)
+ * /start - Dynamic 3-slide visual welcome sequence & onboarding.
+ * /dashboard - Single-message edit (Mini-App feel) for Profile, Stats & Wallet.
+ * /tests - Cascading inline buttons to select category (e.g., Technical, Non-Tech).
+ * /ai_tutor - Direct chat mode with the Agentic AI for doubt solving.
+ * /refer - Generate unique referral link & view "Flex Cards".
+ * /support - Raise an auto-escalating ticket if anything goes wrong.
+### 🆓 2. Free Users (The "Hook" Tier) 😔😂
+ * **Ad-Supported Vibe:** Har test ke baad ek chota inline sponsor/ad button.
+ * **Daily Mini-Mocks:** Din ka 1 free 10-question poll test (accuracy check ke liye).
+ * **Basic Profile:** Total tests attempted aur basic accuracy percentage.
+ * **Refer & Earn (Grassroots Growth):** Dosto ko laao, "Bot Coins" kamao, aur un coins se free mein premium test unlock karo.
+ * **Limited AI:** Din mein sirf 2 baar AI se doubt poochne ki limit.
+### 👑 3. Premium Users (The "God Mode" Tier) 🚀
+ * **Zero Ads:** Pura interface ekdum clean aur distraction-free.
+ * **Smart Query Builder:** Custom tests banao (e.g., "Mujhe sirf galat kiye hue 'Electrician Instructor' ke questions do").
+ * **Offline OMR Scanner:** OMR sheet print karo, tick karo, photo bhejo, aur AI se instant result pao.
+ * **Heatmap Analytics:** Topic-wise weak/strong areas ka visual chart.
+ * **Dynamic Watermarked PDFs:** Apne naam aur TG ID ke watermark ke sath test PDF download karo.
+ * **Target Trigger Alerts:** Custom notification set karo (e.g., "Naya Mock aate hi ping karna").
+ * **Unlimited Omni-Agent Access:** AI tutor se endless doubts, voice-viva, aur live Socratic interventions.
+ * **Elite VIP Group:** Premium purchase karte hi exclusive private TG channel ka auto-invite.
+### 🧠 4. Agentic AI (The Omni-Agent Backend)
+ * **Upload PDF/YouTube to Test:** User apna material de, AI 50-question mock bana ke profile mein save kare.
+ * **Auto-Bug Bounty:** User question report kare, AI khud books check karke database correct kare aur user ko reward de.
+ * **Dynamic Sales Negotiator:** Cart abandon karne pe AI chat kare aur instantly 10-20% ka custom coupon banaye.
+ * **Support Ticket Escalator:** Payment issue aate hi AI khud verify karke admin ko "One-Click Approve" ticket bheje.
+### 🎛️ 5. Admin Panel (The Control Room - Hosted on Vercel/Replit)
+ * **Test Management:** Web panel se questions upload (Bulk CSV/PDF) and tag mapping.
+ * **Pricing Engine:** Subscription plans, flash sales, aur custom coupon codes set karna.
+ * **Dynamic Push Notifications:** Specific user groups ko inline buttons ke sath bulk message bhejna (e.g., "Only for users active this week").
+ * **Abandoned Cart Recovery:** Failed payments track karke automated discount links trigger karna.
+ * **Fraud Detection Engine:** Fake referrals ya botting pakadna aur auto-ban lagana.
+ * **Affiliate Webhooks:** Creators ke liye custom links track karna aur revenue share dekhna.
+### 💳 6. Subscription Plans & Security (Monetization)
+ * **Sachet Pricing (Micro-Txn):** "Pay ₹15 for this 1 Mega Mock" (Impulse buying ke liye best).
+ * **Monthly/Yearly Passes:** ₹199/month ya ₹999/year for full ecosystem access.
+ * **Password & Security:**
+   * Web-dashboard login ke liye bot ke andar ek **"Login OTP"** aayega (No traditional passwords, pure TG auth).

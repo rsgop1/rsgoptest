@@ -88,6 +88,10 @@ export interface UserSession {
   pendingCoupon?: PendingCoupon;
   awaitingCouponInput?: boolean;
   pendingPypTestId?: string;
+  pendingSupportTicket?: {
+    category: string;
+    step: "awaiting_description";
+  };
 }
 
 const sessions = new Map<number, UserSession>();
