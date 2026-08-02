@@ -14,7 +14,19 @@ export interface AdminUser {
   username?: string | null;
   tier: string;
   /** @nullable */
+  premiumExpiry: Date | null;
+  /** @nullable */
+  targetExamMain: string | null;
+  /** @nullable */
   targetExamSub?: string | null;
+  accuracyRate: number;
   totalTestsTaken: number;
+  referralCount: number;
+  aiDoubtCount: number;
+  /** @nullable */
+  aiDoubtDate: string | null;
+  anonDoubtsUsed: number;
+  /** @nullable */
+  anonDoubtDate: string | null;
   joinedAt: string;
 }

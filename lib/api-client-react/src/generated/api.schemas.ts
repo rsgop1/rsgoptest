@@ -22,6 +22,28 @@ export interface AdminAuthResult {
   authenticated: boolean;
 }
 
+export interface AdminPremiumGrantInput {
+  /**
+     * @minimum 1
+     * @maximum 3650
+     */
+  days: number;
+}
+
+export interface AdminPremiumResult {
+  success: boolean;
+  message: string;
+  premiumExpiry: string;
+}
+
+export interface AdminUserMessageInput {
+  /**
+     * @minLength 1
+     * @maxLength 4000
+     */
+  message: string;
+}
+
 export interface DashboardStats {
   totalUsers: number;
   premiumUsers: number;
@@ -115,8 +137,20 @@ export interface AdminUser {
   username?: string | null;
   tier: string;
   /** @nullable */
+  premiumExpiry: string | null;
+  /** @nullable */
+  targetExamMain: string | null;
+  /** @nullable */
   targetExamSub?: string | null;
+  accuracyRate: number;
   totalTestsTaken: number;
+  referralCount: number;
+  aiDoubtCount: number;
+  /** @nullable */
+  aiDoubtDate: string | null;
+  anonDoubtsUsed: number;
+  /** @nullable */
+  anonDoubtDate: string | null;
   joinedAt: string;
 }
 

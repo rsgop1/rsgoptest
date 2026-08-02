@@ -685,14 +685,135 @@ router.get("/users", requireAuth, async (_req: Request, res: Response) => {
       fullName: u.fullName,
       username: u.username,
       tier: u.tier,
+      premiumExpiry: u.premiumExpiry ? u.premiumExpiry.toISOString() : null,
       targetExamSub: u.targetExamSub,
+      targetExamMain: u.targetExamMain,
+      accuracyRate: u.accuracyRate,
       totalTestsTaken: historyMap.get(u.userId) ?? 0,
       referralCount: u.referralCount,
+      aiDoubtCount: u.aiDoubtCount,
+      aiDoubtDate: u.aiDoubtDate,
+      anonDoubtsUsed: u.anonDoubtsUsed,
+      anonDoubtDate: u.anonDoubtDate,
       joinedAt: u.joinedAt.toISOString(),
     })));
   } catch (err) {
     logger.error({ err }, "Admin list users error");
     res.status(500).json({ error: "Failed to load users" });
+  }
+});
+
+router.post("/users/:userId/premium", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = Number(req.params["userId"]);
+    const days = Number((req.body as { days?: number }).days);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      res.status(400).json({ error: "Invalid user ID" });
+      return;
+    }
+    if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
+      res.status(400).json({ error: "Days must be a whole number between 1 and 3650" });
+      return;
+    }
+
+    const [user] = await db.select({
+      userId: usersTable.userId,
+      fullName: usersTable.fullName,
+      premiumExpiry: usersTable.premiumExpiry,
+    }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const base = user.premiumExpiry && user.premiumExpiry > new Date()
+      ? new Date(user.premiumExpiry)
+      : new Date();
+    base.setDate(base.getDate() + days);
+    await db.update(usersTable)
+      .set({ tier: "Premium", premiumExpiry: base })
+      .where(eq(usersTable.userId, userId));
+
+    await getApi().sendMessage(userId, `💎 Premium access updated!\n\nYou now have Premium access until ${base.toLocaleDateString("en-IN")}.\n\nEnjoy unlimited premium features!`).catch(() => {});
+    emitTelemetry(`Admin granted ${days} premium days to user ${userId}`);
+    res.json({ success: true, message: `Premium granted until ${base.toISOString()}`, premiumExpiry: base.toISOString() });
+  } catch (err) {
+    logger.error({ err }, "Admin grant premium error");
+    res.status(500).json({ error: "Failed to grant premium access" });
+  }
+});
+
+router.delete("/users/:userId/premium", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = Number(req.params["userId"]);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      res.status(400).json({ error: "Invalid user ID" });
+      return;
+    }
+    const [user] = await db.select({ userId: usersTable.userId }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    await db.update(usersTable).set({ tier: "Free", premiumExpiry: null }).where(eq(usersTable.userId, userId));
+    await getApi().sendMessage(userId, "Your Premium access has been ended by admin. Contact support if you have questions.").catch(() => {});
+    emitTelemetry(`Admin revoked premium for user ${userId}`);
+    res.json({ success: true, message: "Premium access revoked" });
+  } catch (err) {
+    logger.error({ err }, "Admin revoke premium error");
+    res.status(500).json({ error: "Failed to revoke premium access" });
+  }
+});
+
+router.post("/users/:userId/message", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = Number(req.params["userId"]);
+    const message = String((req.body as { message?: string }).message ?? "").trim();
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      res.status(400).json({ error: "Invalid user ID" });
+      return;
+    }
+    if (!message || message.length > 4000) {
+      res.status(400).json({ error: "Message must be between 1 and 4000 characters" });
+      return;
+    }
+    const [user] = await db.select({ userId: usersTable.userId }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    await getApi().sendMessage(userId, `📩 Message from Series TestPro Admin\n\n${message}`);
+    emitTelemetry(`Admin sent a direct message to user ${userId}`);
+    res.json({ success: true, message: "Message sent" });
+  } catch (err) {
+    logger.error({ err }, "Admin direct user message error");
+    res.status(500).json({ error: "Failed to send message. The user may have blocked the bot." });
+  }
+});
+
+router.post("/users/:userId/reset-usage", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = Number(req.params["userId"]);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      res.status(400).json({ error: "Invalid user ID" });
+      return;
+    }
+    const [user] = await db.select({ userId: usersTable.userId }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    await db.update(usersTable).set({
+      aiDoubtCount: 0,
+      aiDoubtDate: null,
+      anonDoubtsUsed: 0,
+      anonDoubtDate: null,
+    }).where(eq(usersTable.userId, userId));
+    emitTelemetry(`Admin reset daily AI usage for user ${userId}`);
+    res.json({ success: true, message: "Daily AI usage reset" });
+  } catch (err) {
+    logger.error({ err }, "Admin reset user usage error");
+    res.status(500).json({ error: "Failed to reset user usage" });
   }
 });
 

@@ -24,8 +24,11 @@ import type {
   AdminListPaymentsParams,
   AdminListSupportTicketsParams,
   AdminLoginInput,
+  AdminPremiumGrantInput,
+  AdminPremiumResult,
   AdminSettings,
   AdminUser,
+  AdminUserMessageInput,
   BroadcastInput,
   BroadcastResult,
   DashboardStats,
@@ -1682,4 +1685,288 @@ export function useAdminListUsers<TData = Awaited<ReturnType<typeof adminListUse
 
 
 
+
+export const getAdminGrantUserPremiumUrl = (userId: number,) => {
+
+
+
+
+  return `/api/admin/users/${userId}/premium`
+}
+
+/**
+ * @summary Grant or extend premium access for a user
+ */
+export const adminGrantUserPremium = async (userId: number,
+    adminPremiumGrantInput: AdminPremiumGrantInput, options?: RequestInit): Promise<AdminPremiumResult> => {
+
+  return customFetch<AdminPremiumResult>(getAdminGrantUserPremiumUrl(userId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      adminPremiumGrantInput,)
+  }
+);}
+
+
+
+
+export const getAdminGrantUserPremiumMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminGrantUserPremium>>, TError,{userId: number;data: BodyType<AdminPremiumGrantInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof adminGrantUserPremium>>, TError,{userId: number;data: BodyType<AdminPremiumGrantInput>}, TContext> => {
+
+const mutationKey = ['adminGrantUserPremium'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminGrantUserPremium>>, {userId: number;data: BodyType<AdminPremiumGrantInput>}> = (props) => {
+          const {userId,data} = props ?? {};
+
+          return  adminGrantUserPremium(userId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminGrantUserPremiumMutationResult = NonNullable<Awaited<ReturnType<typeof adminGrantUserPremium>>>
+    export type AdminGrantUserPremiumMutationBody = BodyType<AdminPremiumGrantInput>
+    export type AdminGrantUserPremiumMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Grant or extend premium access for a user
+ */
+export const useAdminGrantUserPremium = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminGrantUserPremium>>, TError,{userId: number;data: BodyType<AdminPremiumGrantInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminGrantUserPremium>>,
+        TError,
+        {userId: number;data: BodyType<AdminPremiumGrantInput>},
+        TContext
+      > => {
+      return useMutation(getAdminGrantUserPremiumMutationOptions(options));
+    }
+
+export const getAdminRevokeUserPremiumUrl = (userId: number,) => {
+
+
+
+
+  return `/api/admin/users/${userId}/premium`
+}
+
+/**
+ * @summary Revoke premium access from a user
+ */
+export const adminRevokeUserPremium = async (userId: number, options?: RequestInit): Promise<SuccessResult> => {
+
+  return customFetch<SuccessResult>(getAdminRevokeUserPremiumUrl(userId),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getAdminRevokeUserPremiumMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminRevokeUserPremium>>, TError,{userId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof adminRevokeUserPremium>>, TError,{userId: number}, TContext> => {
+
+const mutationKey = ['adminRevokeUserPremium'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminRevokeUserPremium>>, {userId: number}> = (props) => {
+          const {userId} = props ?? {};
+
+          return  adminRevokeUserPremium(userId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminRevokeUserPremiumMutationResult = NonNullable<Awaited<ReturnType<typeof adminRevokeUserPremium>>>
+
+    export type AdminRevokeUserPremiumMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Revoke premium access from a user
+ */
+export const useAdminRevokeUserPremium = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminRevokeUserPremium>>, TError,{userId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminRevokeUserPremium>>,
+        TError,
+        {userId: number},
+        TContext
+      > => {
+      return useMutation(getAdminRevokeUserPremiumMutationOptions(options));
+    }
+
+export const getAdminMessageUserUrl = (userId: number,) => {
+
+
+
+
+  return `/api/admin/users/${userId}/message`
+}
+
+/**
+ * @summary Send a direct Telegram message to a user
+ */
+export const adminMessageUser = async (userId: number,
+    adminUserMessageInput: AdminUserMessageInput, options?: RequestInit): Promise<SuccessResult> => {
+
+  return customFetch<SuccessResult>(getAdminMessageUserUrl(userId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      adminUserMessageInput,)
+  }
+);}
+
+
+
+
+export const getAdminMessageUserMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminMessageUser>>, TError,{userId: number;data: BodyType<AdminUserMessageInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof adminMessageUser>>, TError,{userId: number;data: BodyType<AdminUserMessageInput>}, TContext> => {
+
+const mutationKey = ['adminMessageUser'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminMessageUser>>, {userId: number;data: BodyType<AdminUserMessageInput>}> = (props) => {
+          const {userId,data} = props ?? {};
+
+          return  adminMessageUser(userId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminMessageUserMutationResult = NonNullable<Awaited<ReturnType<typeof adminMessageUser>>>
+    export type AdminMessageUserMutationBody = BodyType<AdminUserMessageInput>
+    export type AdminMessageUserMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Send a direct Telegram message to a user
+ */
+export const useAdminMessageUser = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminMessageUser>>, TError,{userId: number;data: BodyType<AdminUserMessageInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminMessageUser>>,
+        TError,
+        {userId: number;data: BodyType<AdminUserMessageInput>},
+        TContext
+      > => {
+      return useMutation(getAdminMessageUserMutationOptions(options));
+    }
+
+export const getAdminResetUserUsageUrl = (userId: number,) => {
+
+
+
+
+  return `/api/admin/users/${userId}/reset-usage`
+}
+
+/**
+ * @summary Reset daily AI usage counters
+ */
+export const adminResetUserUsage = async (userId: number, options?: RequestInit): Promise<SuccessResult> => {
+
+  return customFetch<SuccessResult>(getAdminResetUserUsageUrl(userId),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getAdminResetUserUsageMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminResetUserUsage>>, TError,{userId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof adminResetUserUsage>>, TError,{userId: number}, TContext> => {
+
+const mutationKey = ['adminResetUserUsage'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminResetUserUsage>>, {userId: number}> = (props) => {
+          const {userId} = props ?? {};
+
+          return  adminResetUserUsage(userId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminResetUserUsageMutationResult = NonNullable<Awaited<ReturnType<typeof adminResetUserUsage>>>
+
+    export type AdminResetUserUsageMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Reset daily AI usage counters
+ */
+export const useAdminResetUserUsage = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminResetUserUsage>>, TError,{userId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminResetUserUsage>>,
+        TError,
+        {userId: number},
+        TContext
+      > => {
+      return useMutation(getAdminResetUserUsageMutationOptions(options));
+    }
 

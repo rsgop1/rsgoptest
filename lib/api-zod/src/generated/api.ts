@@ -315,10 +315,87 @@ export const AdminListUsersResponseItem = zod.object({
   "fullName": zod.string(),
   "username": zod.string().nullish(),
   "tier": zod.string(),
+  "premiumExpiry": zod.coerce.date().nullable(),
+  "targetExamMain": zod.string().nullable(),
   "targetExamSub": zod.string().nullish(),
+  "accuracyRate": zod.number(),
   "totalTestsTaken": zod.number(),
+  "referralCount": zod.number(),
+  "aiDoubtCount": zod.number(),
+  "aiDoubtDate": zod.string().nullable(),
+  "anonDoubtsUsed": zod.number(),
+  "anonDoubtDate": zod.string().nullable(),
   "joinedAt": zod.string()
 })
 export const AdminListUsersResponse = zod.array(AdminListUsersResponseItem)
+
+
+/**
+ * @summary Grant or extend premium access for a user
+ */
+export const AdminGrantUserPremiumParams = zod.object({
+  "userId": zod.coerce.number()
+})
+
+export const adminGrantUserPremiumBodyDaysMax = 3650;
+
+
+
+export const AdminGrantUserPremiumBody = zod.object({
+  "days": zod.number().min(1).max(adminGrantUserPremiumBodyDaysMax)
+})
+
+export const AdminGrantUserPremiumResponse = zod.object({
+  "success": zod.boolean(),
+  "message": zod.string(),
+  "premiumExpiry": zod.coerce.date()
+})
+
+
+/**
+ * @summary Revoke premium access from a user
+ */
+export const AdminRevokeUserPremiumParams = zod.object({
+  "userId": zod.coerce.number()
+})
+
+export const AdminRevokeUserPremiumResponse = zod.object({
+  "success": zod.boolean(),
+  "message": zod.string()
+})
+
+
+/**
+ * @summary Send a direct Telegram message to a user
+ */
+export const AdminMessageUserParams = zod.object({
+  "userId": zod.coerce.number()
+})
+
+export const adminMessageUserBodyMessageMax = 4000;
+
+
+
+export const AdminMessageUserBody = zod.object({
+  "message": zod.string().min(1).max(adminMessageUserBodyMessageMax)
+})
+
+export const AdminMessageUserResponse = zod.object({
+  "success": zod.boolean(),
+  "message": zod.string()
+})
+
+
+/**
+ * @summary Reset daily AI usage counters
+ */
+export const AdminResetUserUsageParams = zod.object({
+  "userId": zod.coerce.number()
+})
+
+export const AdminResetUserUsageResponse = zod.object({
+  "success": zod.boolean(),
+  "message": zod.string()
+})
 
 
