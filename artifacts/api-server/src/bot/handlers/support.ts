@@ -75,7 +75,31 @@ export function registerSupportHandlers(bot: Bot): void {
   // Cancel
   bot.callbackQuery("tkt_cancel", async (ctx) => {
     await ctx.answerCallbackQuery({ text: "Cancelled." });
+    const { updateSession } = await import("../session.js");
+    updateSession(ctx.from.id, { pendingSupportTicket: undefined });
     try { await ctx.deleteMessage(); } catch {}
+  });
+
+  // Admin quick actions from the Telegram notification.
+  bot.callbackQuery(/^tkt_(resolve|close)_\d+$/, async (ctx) => {
+    const [, action, rawId] = ctx.callbackQuery.data.match(/^tkt_(resolve|close)_(\d+)$/) ?? [];
+    const ticketId = Number(rawId);
+    if (!ticketId) {
+      await ctx.answerCallbackQuery({ text: "Invalid ticket." , show_alert: true });
+      return;
+    }
+    const nextStatus = action === "resolve" ? "resolved" : "closed";
+    await db.update(supportTicketsTable)
+      .set({ status: nextStatus, resolvedBy: ctx.from.id, updatedAt: new Date() })
+      .where(eq(supportTicketsTable.id, ticketId));
+    await ctx.answerCallbackQuery({ text: `Ticket ${nextStatus}.` });
+    try {
+      await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text(`✓ ${nextStatus}`, "tkt_noop") });
+    } catch {}
+  });
+
+  bot.callbackQuery("tkt_noop", async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "Already handled." });
   });
 
   // Handle ticket description text
@@ -126,8 +150,8 @@ export function registerSupportHandlers(bot: Bot): void {
         try {
           await api.sendMessage(
             Number(adminChatId),
-            `🎫 *New Support Ticket*\n\n👤 *Name:* ${escMd(name)}\n🆔 User ID: \`${userId}\`\n📂 Category: *${escMd(category)}*\n\n📝 *Message:*\n${escMd(text.slice(0, 500))}`,
-            { parse_mode: "MarkdownV2", reply_markup: adminKb }
+            `New Support Ticket #${ticket?.id ?? "pending"}\n\nName: ${name}\nUser ID: ${userId}\nCategory: ${category}\n\nMessage:\n${text.slice(0, 500)}`,
+            { reply_markup: adminKb }
           );
         } catch (adminErr) {
           logger.error({ err: adminErr }, "Failed to notify admin about ticket");

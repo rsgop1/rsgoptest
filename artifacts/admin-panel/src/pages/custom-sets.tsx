@@ -13,6 +13,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -23,7 +30,15 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Trash2, ExternalLink, FileText, Search, RefreshCw, Bot } from "lucide-react";
+import { Trash2, ExternalLink, FileText, Search, RefreshCw, Bot, Eye, Clock3, UserRound, Link2 } from "lucide-react";
+
+interface CustomQuestion {
+  id?: string;
+  question: string;
+  options?: string[];
+  correctOptionIndex?: number;
+  explanation?: string;
+}
 
 interface CustomSet {
   id: number;
@@ -40,6 +55,7 @@ interface CustomSet {
   completedAt: string | null;
   fullName: string | null;
   username: string | null;
+  questionsData: CustomQuestion[] | null;
 }
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -62,6 +78,7 @@ export default function CustomSetsPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [selectedSet, setSelectedSet] = useState<CustomSet | null>(null);
 
   const { data: sets = [], isLoading, refetch } = useQuery<CustomSet[]>({
     queryKey: ["admin-custom-sets"],
@@ -242,6 +259,15 @@ export default function CustomSetsPage() {
                             <Button
                               variant="ghost"
                               size="icon"
+                              className="h-7 w-7"
+                              title="View full set details"
+                              onClick={() => setSelectedSet(s)}
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               className="h-7 w-7 text-red-500 hover:text-red-700 hover:bg-red-50"
                               title="Remove set"
                               onClick={() => setDeleteId(s.id)}
@@ -259,6 +285,45 @@ export default function CustomSetsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Sheet open={!!selectedSet} onOpenChange={(open) => !open && setSelectedSet(null)}>
+        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+          {selectedSet && (
+            <>
+              <SheetHeader>
+                <div className="flex items-center gap-2">{statusBadge(selectedSet.status)}<Badge variant="outline">{selectedSet.language === "hi" ? "Hindi" : "English"}</Badge></div>
+                <SheetTitle className="mt-2">{selectedSet.title}</SheetTitle>
+                <SheetDescription>AI-generated custom test details and question preview</SheetDescription>
+              </SheetHeader>
+              <div className="space-y-5 py-6">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground flex items-center gap-1"><UserRound className="h-3.5 w-3.5" /> Created by</p><p className="font-semibold mt-1">{selectedSet.fullName || "Unknown user"}</p><p className="text-xs text-muted-foreground">{selectedSet.username ? `@${selectedSet.username}` : `Telegram ID ${selectedSet.userId}`}</p></div>
+                  <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> Created at</p><p className="font-semibold mt-1">{new Date(selectedSet.createdAt).toLocaleString("en-IN")}</p><p className="text-xs text-muted-foreground">{selectedSet.completedAt ? `Completed ${new Date(selectedSet.completedAt).toLocaleString("en-IN")}` : "Still processing"}</p></div>
+                  <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Source PDF</p><p className="font-semibold mt-1 truncate">{selectedSet.sourceFileName || "Not recorded"}</p></div>
+                  <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Question count</p><p className="font-semibold mt-1">{selectedSet.questionCount} generated questions</p></div>
+                </div>
+                {selectedSet.status === "failed" && selectedSet.failReason && <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{selectedSet.failReason}</div>}
+                {selectedSet.status === "ready" && (
+                  <Button variant="outline" className="w-full" onClick={() => window.open(`https://t.me/${BOT_USERNAME}?start=customset_${selectedSet.shareToken}`, "_blank")}><Link2 className="h-4 w-4 mr-2" />Open share link</Button>
+                )}
+                <div>
+                  <div className="flex items-center justify-between mb-3"><h3 className="font-semibold">Generated questions</h3><Badge variant="secondary">{selectedSet.questionsData?.length ?? 0} available</Badge></div>
+                  <div className="space-y-3">
+                    {(selectedSet.questionsData ?? []).map((question, index) => (
+                      <div key={question.id ?? index} className="rounded-xl border p-4">
+                        <p className="text-sm font-semibold">Q{index + 1}. {question.question}</p>
+                        {question.options?.length ? <div className="grid gap-1.5 mt-3">{question.options.map((option, optionIndex) => <div key={optionIndex} className={`rounded-md px-3 py-2 text-sm ${question.correctOptionIndex === optionIndex ? "bg-emerald-500/10 text-emerald-700 font-medium" : "bg-muted/50"}`}>{String.fromCharCode(65 + optionIndex)}. {option}{question.correctOptionIndex === optionIndex ? "  Correct" : ""}</div>)}</div> : null}
+                        {question.explanation && <p className="text-xs text-muted-foreground mt-3 border-t pt-3"><span className="font-medium">Explanation:</span> {question.explanation}</p>}
+                      </div>
+                    ))}
+                    {!selectedSet.questionsData?.length && <p className="text-sm text-muted-foreground rounded-lg border border-dashed p-6 text-center">Question payload is not available for this set.</p>}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
 
       {/* Delete Dialog */}
       <AlertDialog open={deleteId !== null} onOpenChange={(o) => !o && setDeleteId(null)}>

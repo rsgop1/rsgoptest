@@ -1276,6 +1276,7 @@ router.get("/custom-sets", requireAuth, async (_req: Request, res: Response) => 
         isActive: userCustomSetsTable.isActive,
         createdAt: userCustomSetsTable.createdAt,
         completedAt: userCustomSetsTable.completedAt,
+        questionsData: userCustomSetsTable.questionsData,
         fullName: usersTable.fullName,
         username: usersTable.username,
       })
@@ -1283,7 +1284,11 @@ router.get("/custom-sets", requireAuth, async (_req: Request, res: Response) => 
       .leftJoin(usersTable, eq(userCustomSetsTable.userId, usersTable.userId))
       .orderBy(desc(userCustomSetsTable.createdAt))
       .limit(200);
-    res.json(sets);
+    res.json(sets.map((set) => ({
+      ...set,
+      createdAt: set.createdAt.toISOString(),
+      completedAt: set.completedAt?.toISOString() ?? null,
+    })));
   } catch (err) {
     logger.error({ err }, "admin custom-sets list failed");
     res.status(500).json({ error: "Failed to list custom sets" });

@@ -571,22 +571,101 @@ export function registerCustomTestHandlers(bot: Bot): void {
   });
 
   bot.callbackQuery(/^customset_begin_/, async (ctx) => {
-    await ctx.answerCallbackQuery({ text: "🚀 Starting..." });
+    await ctx.answerCallbackQuery({ text: "Choose your starting point" });
     const setId = parseInt(ctx.callbackQuery.data.replace("customset_begin_", ""), 10);
+    const userId = ctx.from.id;
     const [set] = await db.select().from(userCustomSetsTable).where(eq(userCustomSetsTable.id, setId)).limit(1);
     if (!set || set.status !== "ready") {
       await ctx.reply("❌ Test set not ready yet.");
       return;
     }
+    updateSession(userId, {
+      pendingCustomPractice: {
+        setId: set.id,
+        totalQuestions: set.questionCount,
+        awaiting: "start",
+      },
+    });
+    await ctx.reply(
+      `🔢 This custom test has ${set.questionCount} questions.\n\n` +
+      `Enter the question number you want to start from (1-${set.questionCount}).`,
+    );
+  });
+
+  bot.callbackQuery(/^customset_timer_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const parts = ctx.callbackQuery.data.replace("customset_timer_", "").split("_");
+    const timerSeconds = Number(parts.pop());
+    const setId = Number(parts.join("_"));
+    const pending = getSession(ctx.from.id).pendingCustomPractice;
+    if (!pending || pending.setId !== setId || pending.awaiting !== "count") return;
+    updateSession(ctx.from.id, { pendingCustomPractice: { ...pending, timerSeconds, awaiting: "count" } });
+    const kb = new InlineKeyboard()
+      .text("10", `customset_count_${setId}_10`)
+      .text("20", `customset_count_${setId}_20`)
+      .text("30", `customset_count_${setId}_30`)
+      .row()
+      .text("All", `customset_count_${setId}_all`)
+      .text("Cancel", "customset_cancel_practice");
+    await ctx.reply(
+      `🔢 How many questions do you want to attempt?\n\nTotal available: ${pending.totalQuestions}`,
+      { reply_markup: kb },
+    );
+  });
+
+  bot.callbackQuery(/^customset_count_/, async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "Starting custom test..." });
+    const parts = ctx.callbackQuery.data.replace("customset_count_", "").split("_");
+    const value = parts.pop()!;
+    const setId = Number(parts.join("_"));
+    const pending = getSession(ctx.from.id).pendingCustomPractice;
+    if (!pending || pending.setId !== setId || pending.startQuestion === undefined) return;
+    const count = value === "all" ? pending.totalQuestions : Number(value);
+    if (!Number.isInteger(count) || count < 1 || count > pending.totalQuestions) {
+      await ctx.reply("❌ Invalid question count.");
+      return;
+    }
+    const [set] = await db.select().from(userCustomSetsTable).where(eq(userCustomSetsTable.id, setId)).limit(1);
+    if (!set || set.status !== "ready") { await ctx.reply("❌ Test set is no longer available."); return; }
+    updateSession(ctx.from.id, { pendingCustomPractice: undefined });
     const { startQuizForUser } = await import("./quiz.js");
     await startQuizForUser(ctx.from.id, {
       testId: `custom_${set.id}`,
       testName: set.title,
       questionsData: set.questionsData,
-      timerSeconds: 30,
+      timerSeconds: pending.timerSeconds ?? 30,
       positiveMarking: 1,
       negativeMarking: 0.25,
-    });
+    }, true, pending.timerSeconds ?? 30, pending.startQuestion, count);
+  });
+
+  bot.callbackQuery("customset_cancel_practice", async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "Cancelled" });
+    updateSession(ctx.from.id, { pendingCustomPractice: undefined });
+    try { await ctx.deleteMessage(); } catch {}
+  });
+
+  bot.on("message:text", async (ctx, next) => {
+    const pending = getSession(ctx.from.id).pendingCustomPractice;
+    if (!pending || !/^\d+$/.test(ctx.message.text.trim())) return next();
+    const value = Number(ctx.message.text.trim());
+    if (pending.awaiting === "start") {
+      if (value < 1 || value > pending.totalQuestions) {
+        await ctx.reply(`❌ Enter a number between 1 and ${pending.totalQuestions}.`);
+        return;
+      }
+      const kb = new InlineKeyboard()
+        .text("15s", `customset_timer_${pending.setId}_15`)
+        .text("30s", `customset_timer_${pending.setId}_30`)
+        .text("45s", `customset_timer_${pending.setId}_45`).row()
+        .text("60s", `customset_timer_${pending.setId}_60`)
+        .text("90s", `customset_timer_${pending.setId}_90`)
+        .text("Cancel", "customset_cancel_practice");
+      updateSession(ctx.from.id, { pendingCustomPractice: { ...pending, startQuestion: value, awaiting: "count" } });
+      await ctx.reply("⏱️ Select time allowed per question:", { reply_markup: kb });
+      return;
+    }
+    await ctx.reply("Use the question-count buttons above to continue.");
   });
 
   //

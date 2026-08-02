@@ -79,6 +79,13 @@ export interface UserSession {
     totalQuestions: number;
     awaiting: "start" | "count";
   };
+  pendingCustomPractice?: {
+    setId: number;
+    startQuestion?: number;
+    timerSeconds?: number;
+    totalQuestions: number;
+    awaiting: "start" | "count";
+  };
   pendingFileIdMode?: boolean;
   pendingCustomTest?: {
     step: "awaiting_language" | "awaiting_count" | "awaiting_pdf";
