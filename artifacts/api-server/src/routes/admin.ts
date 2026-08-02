@@ -63,11 +63,16 @@ const router = Router();
 router.post("/auth/login", (req: Request, res: Response) => {
   const { password } = req.body as { password?: string };
   if (password === ADMIN_PASSWORD) {
+    // The Replit preview can reach the API through an internal HTTP hop even
+    // when the public page is HTTPS. Only mark the cookie Secure when the
+    // request actually arrived over HTTPS, otherwise the browser drops it
+    // and every authenticated API call becomes 401.
+    const isHttps = req.secure || req.get("x-forwarded-proto") === "https";
     res.cookie(COOKIE_NAME, signValue("admin"), {
       httpOnly: true,
       maxAge: 24 * 60 * 60 * 1000,
-      sameSite: "none",
-      secure: true,
+      sameSite: isHttps ? "none" : "lax",
+      secure: isHttps,
     });
     res.json({ authenticated: true });
   } else {

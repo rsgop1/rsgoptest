@@ -12,3 +12,4 @@
 - [PDF-grounded AI and tutor flow](pdf-ai-tutor-flow.md) — binary PDF bytes are not text; use real extraction, publish command menus, and handle tutor follow-up state.
 - [Bot AI, support, and profile flows](bot-ai-and-support.md) — centralize OpenRouter usage and prefer plain text for dynamic Telegram confirmations.
 - [Admin support workspace](admin-support-workspace.md) — `/support` is the real support_tickets inbox; keep it separate from question reports.
+- [Admin preview cookie](admin-preview-cookie.md) — preview auth cookies must be proxy-aware or React admin API calls appear empty with 401s.
