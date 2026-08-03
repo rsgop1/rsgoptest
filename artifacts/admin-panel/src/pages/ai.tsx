@@ -45,6 +45,12 @@ interface CouponCode {
   discountInr: number;
   discountStars: number;
   discountPct: number;
+  premiumDays: number;
+  perUserLimit: number;
+  grantPremium: boolean;
+  campaignName: string | null;
+  internalNote: string | null;
+  redemptionCount: number;
   usageLimit: number;
   usedCount: number;
   expiresAt: string | null;
@@ -61,6 +67,11 @@ const emptyCouponForm = {
   discountInr: 0,
   discountStars: 0,
   discountPct: 0,
+  premiumDays: 30,
+  perUserLimit: 1,
+  grantPremium: false,
+  campaignName: "",
+  internalNote: "",
   usageLimit: 100,
   expiresAt: "",
 };
@@ -382,6 +393,7 @@ export default function AiPage() {
                           {c.discountPct > 0 && (
                             <span className="text-green-600 dark:text-green-400 font-semibold">{c.discountPct}% off</span>
                           )}
+                          {c.grantPremium && <span className="text-purple-600 dark:text-purple-400 font-semibold">💎 {c.premiumDays}d Premium</span>}
                           {c.discountInr > 0 && (
                             <span className="text-green-600 dark:text-green-400 font-semibold">₹{c.discountInr} off</span>
                           )}
@@ -392,7 +404,8 @@ export default function AiPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-0.5">
-                          <span className="font-medium">{c.usedCount}/{c.usageLimit}</span>
+                           <span className="font-medium">{c.usedCount}/{c.usageLimit}</span>
+                           <span className="text-xs text-muted-foreground">{c.redemptionCount ?? c.usedCount} redemptions · {c.perUserLimit}/user</span>
                           <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
                             <div
                               className="h-full bg-primary rounded-full"
@@ -514,6 +527,38 @@ export default function AiPage() {
                   onChange={(e) => setCouponForm(f => ({ ...f, expiresAt: e.target.value }))} />
               </div>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Premium Days</Label>
+                <Input type="number" min="1" max="3650" className="mt-1" value={couponForm.premiumDays}
+                  onChange={(e) => setCouponForm(f => ({ ...f, premiumDays: Math.max(1, parseInt(e.target.value) || 1) }))} />
+              </div>
+              <div>
+                <Label className="text-xs">Per-user Limit</Label>
+                <Input type="number" min="1" className="mt-1" value={couponForm.perUserLimit}
+                  onChange={(e) => setCouponForm(f => ({ ...f, perUserLimit: Math.max(1, parseInt(e.target.value) || 1) }))} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div>
+                <Label>Auto-grant Premium</Label>
+                <p className="text-xs text-muted-foreground mt-1">100% discount coupons activate Premium and VIP instantly.</p>
+              </div>
+              <Switch checked={couponForm.grantPremium} onCheckedChange={(v) => setCouponForm(f => ({ ...f, grantPremium: v }))} />
+            </div>
+            <div className="space-y-3">
+              <div>
+                <Label className="text-xs">Campaign Name (optional)</Label>
+                <Input className="mt-1" value={couponForm.campaignName} onChange={(e) => setCouponForm(f => ({ ...f, campaignName: e.target.value }))} placeholder="Launch week / Partner campaign" />
+              </div>
+              <div>
+                <Label className="text-xs">Internal Note (optional)</Label>
+                <Textarea rows={2} className="mt-1" value={couponForm.internalNote} onChange={(e) => setCouponForm(f => ({ ...f, internalNote: e.target.value }))} placeholder="Only visible to admins" />
+              </div>
+            </div>
+            {couponForm.grantPremium && couponForm.discountPct < 100 && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">Auto-grant is enabled, but instant activation requires a 100% percentage discount.</p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCouponOpen(false)}>Cancel</Button>

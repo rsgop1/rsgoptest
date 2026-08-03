@@ -8,10 +8,12 @@ import {
   purchasedTestsTable,
   flashSalesTable,
   couponCodesTable,
+  couponRedemptionsTable,
 } from "@workspace/db";
 import { eq, and, lte, gte, sql } from "drizzle-orm";
 import { getSession, updateSession } from "../session.js";
 import { getConfig } from "./helpers.js";
+import { activatePremium } from "./premium.js";
 import { logger } from "../../lib/logger.js";
 import { randomUUID, randomBytes } from "crypto";
 
@@ -43,7 +45,7 @@ async function getEffectivePrice(testId: string, priceInr: number, priceInStars:
   return { inr: priceInr, stars: priceInStars, isOnSale: false };
 }
 
-async function validateCoupon(code: string): Promise<typeof couponCodesTable.$inferSelect | null> {
+async function validateCoupon(code: string, userId: number): Promise<typeof couponCodesTable.$inferSelect | null> {
   const [coupon] = await db.select().from(couponCodesTable)
     .where(and(
       eq(couponCodesTable.code, code.toUpperCase().trim()),
@@ -53,6 +55,10 @@ async function validateCoupon(code: string): Promise<typeof couponCodesTable.$in
   if (!coupon) return null;
   if (coupon.usedCount >= coupon.usageLimit) return null;
   if (coupon.expiresAt && coupon.expiresAt < new Date()) return null;
+  const [redemptions] = await db.select({ count: sql<number>`count(*)` })
+    .from(couponRedemptionsTable)
+    .where(and(eq(couponRedemptionsTable.couponId, coupon.id), eq(couponRedemptionsTable.userId, userId)));
+  if (Number(redemptions?.count ?? 0) >= coupon.perUserLimit) return null;
   return coupon;
 }
 
@@ -286,7 +292,7 @@ export function registerPaymentHandlers(bot: Bot): void {
       if (isPremium) {
         const expiry = new Date();
         expiry.setDate(expiry.getDate() + 30);
-        await db.update(usersTable).set({ tier: "Premium", premiumExpiry: expiry }).where(eq(usersTable.userId, userId));
+        await activatePremium(userId, 30, "Premium Stars payment");
         await ctx.reply(
           `✅ *Payment Successful\\!*\n\n💎 *Testbook\\+ Premium* is now active\\!\n📅 Valid till: *${escMd(expiry.toLocaleDateString("en-IN"))}*\n\nUse /test\\_series to access all tests\\.`,
           { parse_mode: "MarkdownV2" }
@@ -311,7 +317,7 @@ export function registerPaymentHandlers(bot: Bot): void {
 
     const code = ctx.message.text.trim().toUpperCase();
     const pending = session.pendingCoupon;
-    const coupon = await validateCoupon(code);
+    const coupon = await validateCoupon(code, userId);
 
     if (!coupon) {
       await ctx.reply(
@@ -330,6 +336,12 @@ export function registerPaymentHandlers(bot: Bot): void {
     await db.update(couponCodesTable)
       .set({ usedCount: sql`${couponCodesTable.usedCount} + 1` })
       .where(eq(couponCodesTable.code, coupon.code));
+    await db.insert(couponRedemptionsTable).values({
+      couponId: coupon.id,
+      userId,
+      grantedPremiumDays: coupon.discountPct >= 100 ? coupon.premiumDays : 0,
+      outcome: "applied",
+    });
 
     updateSession(userId, { awaitingCouponInput: false });
 
@@ -340,6 +352,23 @@ export function registerPaymentHandlers(bot: Bot): void {
     }
 
     const savedAmount = pending.originalInr - discountedInr;
+    if (pending.isPremium && coupon.discountPct >= 100) {
+      await db.insert(paymentsTable).values({
+        paymentId: randomUUID(),
+        userId,
+        method: "COUPON",
+        amount: 0,
+        testId: "premium",
+        status: "Approved",
+      });
+      await activatePremium(userId, coupon.premiumDays, `100% coupon ${coupon.code}`);
+      updateSession(userId, { pendingCoupon: undefined, pendingUpiPayment: undefined });
+      await ctx.reply(
+        `🎁 *100% Coupon Redeemed\\!*\n\n💎 Premium has been activated instantly for *${coupon.premiumDays} days*\\. Your VIP invite and welcome details are on the way\\.`,
+        { parse_mode: "MarkdownV2" },
+      );
+      return;
+    }
     await ctx.reply(
       `✅ *Coupon Applied\\!*\n\n🏷️ Code: \`${escMd(coupon.code)}\`\n💰 Original: ~~₹${pending.originalInr}~~\n🎉 You save: *₹${savedAmount}*\n💚 Final Amount: *₹${discountedInr}*`,
       { parse_mode: "MarkdownV2" }

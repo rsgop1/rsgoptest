@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   useAdminListUsers,
   useAdminGrantUserPremium,
@@ -48,6 +49,21 @@ export default function Users() {
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
   const [premiumDays, setPremiumDays] = useState("30");
   const [message, setMessage] = useState("");
+  const { data: premiumOverview } = useQuery<{
+    activePremium: number;
+    expiringSoon: number;
+    vipEnabled: boolean;
+    vipFailures: number;
+    couponGrantedPremium: number;
+  }>({
+    queryKey: ["admin-premium-overview"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/premium/overview", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load Premium overview");
+      return res.json();
+    },
+    refetchInterval: 60_000,
+  });
 
   const refreshUsers = () => queryClient.invalidateQueries({ queryKey: getAdminListUsersQueryKey() });
   const success = (title: string) => {
@@ -130,6 +146,14 @@ export default function Users() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">User Control Center</h1>
         <p className="text-muted-foreground mt-1">Manage premium access, daily limits, and direct Telegram communication.</p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Active Premium</p><p className="mt-1 text-2xl font-bold text-amber-600">{premiumOverview?.activePremium ?? "—"}</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Expiring in 7 days</p><p className="mt-1 text-2xl font-bold">{premiumOverview?.expiringSoon ?? "—"}</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">VIP status</p><p className="mt-1 text-2xl font-bold">{premiumOverview ? (premiumOverview.vipEnabled ? "Live" : "Off") : "—"}</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">VIP failures</p><p className="mt-1 text-2xl font-bold text-red-600">{premiumOverview?.vipFailures ?? "—"}</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Coupon Premium grants</p><p className="mt-1 text-2xl font-bold text-purple-600">{premiumOverview?.couponGrantedPremium ?? "—"}</p></CardContent></Card>
       </div>
 
       <Card>

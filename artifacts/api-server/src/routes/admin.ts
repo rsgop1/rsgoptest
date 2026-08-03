@@ -13,6 +13,7 @@ import {
   liveTestsTable,
   achievementsTable,
   couponCodesTable,
+  couponRedemptionsTable,
   userCustomSetsTable,
   supportTicketsTable,
 } from "@workspace/db";
@@ -25,6 +26,7 @@ import { telemetryEmitter, getRecentEvents, emitTelemetry } from "../lib/telemet
 import { createHmac, randomBytes } from "crypto";
 import { getVipConfig, grantVipAccess, removeVipAccess, rotateVipAccessCode, syncVipAccess } from "../bot/handlers/vip.js";
 import { getAgenticAnalysisStatus, runAgenticAnalysis } from "../bot/agentic.js";
+import { activatePremium } from "../bot/handlers/premium.js";
 
 const ADMIN_PASSWORD = "rsg@123";
 const COOKIE_NAME = "tbadmin";
@@ -252,6 +254,10 @@ router.post("/payments/:paymentId/approve", requireAuth, async (req: Request, re
     const { paymentId } = req.params as { paymentId: string };
     const [payment] = await db.select().from(paymentsTable).where(eq(paymentsTable.paymentId, paymentId)).limit(1);
     if (!payment) { res.status(404).json({ error: "Payment not found" }); return; }
+    if (payment.status === "Approved") {
+      res.json({ success: true, message: "Payment was already approved" });
+      return;
+    }
 
     await db.update(paymentsTable).set({ status: "Approved" }).where(eq(paymentsTable.paymentId, paymentId));
 
@@ -260,10 +266,7 @@ router.post("/payments/:paymentId/approve", requireAuth, async (req: Request, re
       await db.insert(purchasedTestsTable).values({ userId: payment.userId, testId: payment.testId }).catch(() => {});
       await api.sendMessage(payment.userId, `✅ Payment Approved!\n\nYour UPI payment has been verified! Test unlocked.\n\nUse /test_series to access it.`).catch(() => {});
     } else {
-      const expiry = new Date();
-      expiry.setDate(expiry.getDate() + 30);
-      await db.update(usersTable).set({ tier: "Premium", premiumExpiry: expiry }).where(eq(usersTable.userId, payment.userId));
-      await api.sendMessage(payment.userId, `💎 Premium Activated!\n\nYour payment has been verified. Series TestPro Premium is now active for 30 days!\n\nUse /test_series to access all tests.`).catch(() => {});
+      const expiry = await activatePremium(payment.userId, 30, "UPI payment approved");
     }
 
     emitTelemetry(`User ${payment.userId} paid ₹${payment.amount} via ${payment.method} — Approved`);
@@ -934,14 +937,9 @@ router.post("/users/:userId/premium", requireAuth, async (req: Request, res: Res
       ? new Date(user.premiumExpiry)
       : new Date();
     base.setDate(base.getDate() + days);
-    await db.update(usersTable)
-      .set({ tier: "Premium", premiumExpiry: base })
-      .where(eq(usersTable.userId, userId));
-
-    await getApi().sendMessage(userId, `💎 Premium access updated!\n\nYou now have Premium access until ${base.toLocaleDateString("en-IN")}.\n\nEnjoy unlimited premium features!`).catch(() => {});
-    await grantVipAccess(userId, "Admin premium grant");
+    const expiry = await activatePremium(userId, days, "Admin premium grant");
     emitTelemetry(`Admin granted ${days} premium days to user ${userId}`);
-    res.json({ success: true, message: `Premium granted until ${base.toISOString()}`, premiumExpiry: base.toISOString() });
+    res.json({ success: true, message: `Premium granted until ${expiry.toISOString()}`, premiumExpiry: expiry.toISOString() });
   } catch (err) {
     logger.error({ err }, "Admin grant premium error");
     res.status(500).json({ error: "Failed to grant premium access" });
@@ -1398,8 +1396,14 @@ router.post("/ai-settings", requireAuth, async (req: Request, res: Response) => 
 // ── COUPON CODES ─────────────────────────────────────────────────────────────
 router.get("/coupons", requireAuth, async (_req: Request, res: Response) => {
   try {
-    const coupons = await db.select().from(couponCodesTable).orderBy(couponCodesTable.id);
-    res.json(coupons);
+    const coupons = await db.select().from(couponCodesTable).orderBy(desc(couponCodesTable.id));
+    const enriched = await Promise.all(coupons.map(async (coupon) => {
+      const [redemptions] = await db.select({ count: count() })
+        .from(couponRedemptionsTable)
+        .where(eq(couponRedemptionsTable.couponId, coupon.id));
+      return { ...coupon, redemptionCount: redemptions?.count ?? 0 };
+    }));
+    res.json(enriched);
   } catch (err) {
     logger.error({ err }, "Coupons GET error");
     res.status(500).json({ error: "Failed to load coupons" });
@@ -1408,16 +1412,25 @@ router.get("/coupons", requireAuth, async (_req: Request, res: Response) => {
 
 router.post("/coupons", requireAuth, async (req: Request, res: Response) => {
   try {
-    const { code, discountInr, discountStars, discountPct, usageLimit, expiresAt } = req.body as {
+    const { code, discountInr, discountStars, discountPct, premiumDays, perUserLimit, grantPremium, campaignName, internalNote, usageLimit, expiresAt } = req.body as {
       code: string; discountInr: number; discountStars: number;
-      discountPct: number; usageLimit: number; expiresAt?: string;
+      discountPct: number; premiumDays?: number; perUserLimit?: number; grantPremium?: boolean;
+      campaignName?: string; internalNote?: string; usageLimit: number; expiresAt?: string;
     };
     if (!code?.trim()) { res.status(400).json({ error: "Coupon code is required" }); return; }
+    if (Number(discountPct) < 0 || Number(discountPct) > 100) { res.status(400).json({ error: "Percentage discount must be between 0 and 100" }); return; }
+    if (Number(premiumDays ?? 30) < 1 || Number(premiumDays ?? 30) > 3650) { res.status(400).json({ error: "Premium days must be between 1 and 3650" }); return; }
+    if (Number(perUserLimit ?? 1) < 1) { res.status(400).json({ error: "Per-user limit must be at least 1" }); return; }
     const [coupon] = await db.insert(couponCodesTable).values({
       code: code.toUpperCase().trim(),
       discountInr: discountInr ?? 0,
       discountStars: discountStars ?? 0,
       discountPct: discountPct ?? 0,
+      premiumDays: premiumDays ?? 30,
+      perUserLimit: perUserLimit ?? 1,
+      grantPremium: Boolean(grantPremium) || Number(discountPct) >= 100,
+      campaignName: campaignName?.trim() || null,
+      internalNote: internalNote?.trim() || null,
       usageLimit: usageLimit ?? 100,
       expiresAt: expiresAt ? new Date(expiresAt) : null,
     }).returning();
@@ -1429,6 +1442,31 @@ router.post("/coupons", requireAuth, async (req: Request, res: Response) => {
     } else {
       res.status(500).json({ error: "Failed to create coupon" });
     }
+  }
+});
+
+router.get("/premium/overview", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const now = new Date();
+    const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const [active, expiring, failedVip, couponGranted] = await Promise.all([
+      db.select({ count: count() }).from(usersTable).where(and(eq(usersTable.tier, "Premium"), gt(usersTable.premiumExpiry, now))),
+      db.select({ count: count() }).from(usersTable).where(and(eq(usersTable.tier, "Premium"), gt(usersTable.premiumExpiry, now), lt(usersTable.premiumExpiry, soon))),
+      db.select({ count: count() }).from(couponRedemptionsTable).where(eq(couponRedemptionsTable.outcome, "vip_failed")),
+      db.select({ count: count() }).from(couponRedemptionsTable).where(gt(couponRedemptionsTable.grantedPremiumDays, 0)),
+    ]);
+    const vip = await getVipConfig();
+    res.json({
+      activePremium: active[0]?.count ?? 0,
+      expiringSoon: expiring[0]?.count ?? 0,
+      vipEnabled: vip.enabled,
+      vipGroupId: vip.groupId,
+      vipFailures: failedVip[0]?.count ?? 0,
+      couponGrantedPremium: couponGranted[0]?.count ?? 0,
+    });
+  } catch (err) {
+    logger.error({ err }, "Premium overview error");
+    res.status(500).json({ error: "Failed to load Premium overview" });
   }
 });
 

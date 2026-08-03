@@ -13,5 +13,6 @@ export * from "./reports";
 export * from "./live-tests";
 export * from "./anon-doubts";
 export * from "./coupon-codes";
+export * from "./coupon-redemptions";
 export * from "./user-custom-sets";
 export * from "./support-tickets";
