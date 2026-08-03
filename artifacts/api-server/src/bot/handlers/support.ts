@@ -19,7 +19,32 @@ const CATEGORIES: Record<string, string> = {
 };
 
 export function registerSupportHandlers(bot: Bot): void {
-  // /support — create a support ticket
+  async function showMyTickets(ctx: any): Promise<void> {
+    const tickets = await db.select({
+      id: supportTicketsTable.id,
+      category: supportTicketsTable.category,
+      message: supportTicketsTable.message,
+      status: supportTicketsTable.status,
+      adminNote: supportTicketsTable.adminNote,
+      updatedAt: supportTicketsTable.updatedAt,
+    }).from(supportTicketsTable)
+      .where(eq(supportTicketsTable.userId, ctx.from.id))
+      .orderBy(desc(supportTicketsTable.updatedAt))
+      .limit(10);
+    if (!tickets.length) {
+      await ctx.reply("📭 You have no support tickets yet.");
+      return;
+    }
+    const lines = tickets.map((ticket) => {
+      const reply = ticket.adminNote?.trim()
+        ? `\n💬 Admin reply: ${ticket.adminNote.trim()}`
+        : "\n💬 No admin reply yet.";
+      return `🎫 Ticket #${ticket.id} · ${ticket.status}\n${CATEGORIES[ticket.category] ?? ticket.category}\nYour message: ${ticket.message.slice(0, 240)}${reply}`;
+    });
+    await ctx.reply(`📬 *Your Support Tickets*\n\n${lines.join("\n\n")}`, { parse_mode: "Markdown" });
+  }
+
+  // /support — create a support ticket or view previous tickets
   bot.command("support", async (ctx) => {
     const userId = ctx.from!.id;
 
@@ -31,7 +56,9 @@ export function registerSupportHandlers(bot: Bot): void {
       .text("💡 Feedback", "tkt_cat_feedback")
       .row()
       .text("📋 Other", "tkt_cat_other")
-      .text("❌ Cancel", "tkt_cancel");
+      .text("❌ Cancel", "tkt_cancel")
+      .row()
+      .text("📬 My Tickets", "tkt_my");
 
     await ctx.reply(
       "🎫 *Support Ticket*\n\n" +
@@ -39,6 +66,11 @@ export function registerSupportHandlers(bot: Bot): void {
         "Select a category:",
       { parse_mode: "MarkdownV2", reply_markup: kb }
     );
+  });
+
+  bot.callbackQuery("tkt_my", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showMyTickets(ctx);
   });
 
   // Category selection

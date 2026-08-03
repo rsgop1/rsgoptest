@@ -1095,6 +1095,8 @@ router.patch("/support-tickets/:id", requireAuth, async (req: Request, res: Resp
   try {
     const id = Number(req.params["id"]);
     const body = req.body as { status?: string; priority?: string; adminNote?: string | null };
+    const [before] = await db.select().from(supportTicketsTable).where(eq(supportTicketsTable.id, id)).limit(1);
+    if (!before) { res.status(404).json({ error: "Ticket not found" }); return; }
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (body.status && ["open", "in_progress", "resolved", "closed"].includes(body.status)) updates.status = body.status;
     if (body.priority && ["low", "normal", "high", "urgent"].includes(body.priority)) updates.priority = body.priority;
@@ -1103,11 +1105,17 @@ router.patch("/support-tickets/:id", requireAuth, async (req: Request, res: Resp
     await db.update(supportTicketsTable).set(updates).where(eq(supportTicketsTable.id, id));
     const [ticket] = await db.select().from(supportTicketsTable).where(eq(supportTicketsTable.id, id)).limit(1);
     if (!ticket) { res.status(404).json({ error: "Ticket not found" }); return; }
-    if (body.status === "resolved" || body.status === "closed") {
+    const noteChanged = body.adminNote !== undefined && (body.adminNote?.trim() || null) !== (before.adminNote?.trim() || null);
+    if (body.status === "resolved" || body.status === "closed" || noteChanged) {
       try {
+        const statusLine = body.status && body.status !== before.status
+          ? `\nStatus: ${body.status}`
+          : "";
+        const noteLine = body.adminNote?.trim()
+          ? `\n\nAdmin reply:\n${body.adminNote.trim()}`
+          : "";
         await getApi().sendMessage(ticket.userId,
-          `Support ticket #${ticket.id} has been marked ${body.status}.` +
-          (body.adminNote?.trim() ? `\n\nAdmin note: ${body.adminNote.trim()}` : ""));
+          `🎫 Support ticket #${ticket.id} update${statusLine}${noteLine}\n\nUse /support → My Tickets to view the full ticket history.`);
       } catch (notifyErr) {
         logger.warn({ err: notifyErr, ticketId: id }, "Could not notify ticket user");
       }

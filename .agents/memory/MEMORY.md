@@ -16,3 +16,4 @@
 - [VIP access control](vip-access-control.md) — Premium VIP group access uses expiring one-member invite links plus scheduled expiry removal; group ID/config lives in global config.
 - [Bot Study Hub navigation](bot-study-hub.md) — `/menu` and returning `/start` use inline navigation; commands remain as backward-compatible fallbacks.
 - [Agentic admin-only mode](agentic-admin-only.md) — Agentic analysis is admin-panel-only; bot AI entry points are hidden/disabled while the background worker remains active.
+- [AI Space session behavior](ai-space-session.md) — Premium AI Space uses HTML formatting, question-level mistake context, title-only analytics, and expires after five idle minutes.

@@ -11,6 +11,7 @@ import { logger } from "../lib/logger.js";
 type QuestionAnalysis = { question: string; topics: string[]; skills: string[]; difficulty: string; focus: string };
 type SetAnalysis = { topics: string[]; skills: string[]; difficulty: string; focus: string; questions: QuestionAnalysis[] };
 const setAnalysisCache = new Map<string, { analysis: SetAnalysis; updatedAt: number }>();
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 let analysisRunning = false;
 let lastRunAt: number | null = null;
 let lastCompletedAt: number | null = null;
@@ -36,12 +37,26 @@ export async function openAgenticWorkspace(ctx: any): Promise<void> {
     return;
   }
   updateSession(ctx.from.id, { agenticActive: true, agenticMessageIds: currentMessageId ? [currentMessageId] : [] });
+  refreshAgenticIdle(ctx.from.id);
   try {
     await ctx.editMessageText(agenticRoomText(), { reply_markup: agenticRoomKeyboard() });
   } catch {
     const sent = await ctx.reply(agenticRoomText(), { reply_markup: agenticRoomKeyboard() });
     updateSession(ctx.from.id, { agenticMessageIds: [sent.message_id] });
   }
+}
+
+function refreshAgenticIdle(userId: number): void {
+  const current = getSession(userId);
+  if (current.agenticIdleTimer) clearTimeout(current.agenticIdleTimer);
+  const timer = setTimeout(async () => {
+    const session = getSession(userId);
+    if (!session.agenticActive) return;
+    await deleteTrackedAgenticMessages(userId);
+    clearAgenticSession(userId);
+    logger.info({ userId }, "Agentic AI session expired after idle timeout");
+  }, IDLE_TIMEOUT_MS);
+  updateSession(userId, { agenticIdleTimer: timer });
 }
 
 async function deleteTrackedAgenticMessages(userId: number, keepMessageId?: number): Promise<void> {
@@ -84,6 +99,7 @@ export function registerAgenticHandlers(bot: Bot): void {
   });
 
   bot.callbackQuery("agentic_insights", async (ctx) => {
+    refreshAgenticIdle(ctx.from.id);
     await ctx.answerCallbackQuery({ text: "Building your insights…" });
     await sendAgenticToolResult(ctx, "Personal Insights", "Give me a concise personal dashboard: my weak areas, strong areas, recent trend, and the best next 3 actions.");
   });
@@ -94,17 +110,20 @@ export function registerAgenticHandlers(bot: Bot): void {
     const session = getSession(userId);
     if (!session.agenticActive || text.startsWith("/")) return next();
 
+    refreshAgenticIdle(userId);
     trackMessage(userId, ctx.message.message_id);
     const thinking = await ctx.reply("🧠 Agentic AI is thinking through your request…");
     trackMessage(userId, thinking.message_id);
     try {
       const answer = await answerAgenticMessage(userId, text);
-      await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, `🧠 Agentic AI\n\n${answer}`, {
+      await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, renderAgenticText(`🧠 Agentic AI\n\n${answer}`), {
+        parse_mode: "HTML",
         reply_markup: agenticRoomKeyboard(),
       });
     } catch (error) {
       logger.error({ error, userId }, "Agentic AI response failed");
       await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, "⚠️ I could not complete that request right now. Please try again.", {
+        parse_mode: "HTML",
         reply_markup: agenticRoomKeyboard(),
       });
     }
@@ -118,19 +137,34 @@ function trackMessage(userId: number, messageId: number): void {
 }
 
 async function sendAgenticToolResult(ctx: any, title: string, request: string): Promise<void> {
+  refreshAgenticIdle(ctx.from.id);
   const thinking = await ctx.reply(`🧠 ${title} is being prepared…`);
   trackMessage(ctx.from.id, thinking.message_id);
   try {
     const answer = await answerAgenticMessage(ctx.from.id, request);
-    await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, `🧠 ${title}\n\n${answer}`, {
+    await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, renderAgenticText(`🧠 ${title}\n\n${answer}`), {
+      parse_mode: "HTML",
       reply_markup: agenticRoomKeyboard(),
     });
   } catch (error) {
     logger.error({ error }, "Agentic tool failed");
     await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, "⚠️ Agentic analysis is temporarily unavailable.", {
+      parse_mode: "HTML",
       reply_markup: agenticRoomKeyboard(),
     });
   }
+}
+
+function renderAgenticText(value: string): string {
+  const escaped = value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return escaped
+    .replace(/\*\*(.+?)\*\*/gs, "<b>$1</b>")
+    .replace(/__(.+?)__/gs, "<b>$1</b>")
+    .replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/g, "<i>$1</i>")
+    .replace(/(?<!\w)_([^_\n]+)_(?!\w)/g, "<i>$1</i>");
 }
 
 async function getUserInsights(userId: number): Promise<string> {
@@ -179,12 +213,21 @@ async function getUserInsights(userId: number): Promise<string> {
       const topper = population.reduce((max, row) => Math.max(max, row.score), -Infinity);
       const test = testMap.get(testId);
       const qCount = Array.isArray(test?.questionsData) ? test.questionsData.length : 0;
+       const questionData = Array.isArray(test?.questionsData) ? test.questionsData as any[] : [];
       const questionStats = Array.from({ length: qCount }, (_, index) => {
         const valid = rows.filter((row) => Array.isArray(row.userAnswers) && typeof (row.userAnswers as unknown[])[index] === "number");
-        const correct = valid.filter((row) => (row.userAnswers as unknown[])[index] === (test?.questionsData as any[])?.[index]?.correctOptionIndex).length;
+         const correct = valid.filter((row) => (row.userAnswers as unknown[])[index] === questionData[index]?.correctOptionIndex).length;
         return valid.length ? correct / valid.length : null;
       }).filter((v): v is number => v !== null);
       const weakQuestionAccuracy = questionStats.length ? Math.min(...questionStats) * 100 : null;
+       const mistakes = rows.flatMap((row) => {
+         const answers = Array.isArray(row.userAnswers) ? row.userAnswers : [];
+         return questionData.flatMap((question, index) => {
+           const answerIndex = answers[index];
+           if (typeof answerIndex !== "number" || answerIndex === question.correctOptionIndex) return [];
+           return [`Question: ${String(question.question).slice(0, 260)} | User answer: ${question.options?.[answerIndex] ?? "unknown"} | Correct answer: ${question.options?.[question.correctOptionIndex] ?? "unknown"} | Explanation: ${String(question.explanation ?? "").slice(0, 260)}`];
+         });
+       }).slice(0, 40);
       const sorted = [...population].sort((a, b) => b.score - a.score);
       const band = Math.max(1, Math.ceil(sorted.length * 0.27));
       const accuracyFor = (group: typeof rows) => {
@@ -194,27 +237,36 @@ async function getUserInsights(userId: number): Promise<string> {
       const discrimination = sorted.length >= 4 ? (accuracyFor(sorted.slice(0, band)) - accuracyFor(sorted.slice(-band))) * 100 : null;
       const indexed = setAnalysisCache.get(testId)?.analysis;
       const topics = indexed?.topics?.length ? indexed.topics.join(", ") : "not indexed yet";
-      return `Title: ${title}; attempts=${rows.length}; average accuracy=${avg.toFixed(1)}%; best personal score=${rows.reduce((max, row) => Math.max(max, row.score), -Infinity)}; topper score=${topper === -Infinity ? "unknown" : topper}; weak topics from question intelligence=${topics}; weakest question accuracy=${weakQuestionAccuracy === null ? "not enough data" : `${weakQuestionAccuracy.toFixed(1)}%`}; discrimination index=${discrimination === null ? "not reliable yet" : discrimination.toFixed(1)}`;
+       return `Title: ${title}; attempts=${rows.length}; average accuracy=${avg.toFixed(1)}%; best personal score=${rows.reduce((max, row) => Math.max(max, row.score), -Infinity)}; topper score=${topper === -Infinity ? "unknown" : topper}; weak topics from question intelligence=${topics}; weakest question accuracy=${weakQuestionAccuracy === null ? "not enough data" : `${weakQuestionAccuracy.toFixed(1)}%`}; discrimination index=${discrimination === null ? "not reliable yet" : discrimination.toFixed(1)}\nMistakes to coach:\n${mistakes.length ? mistakes.join("\n") : "No recorded mistakes in the available attempts."}`;
     }).join("\n")
     : "No completed attempts yet";
   const weak = attempts.length
-    ? attempts.filter((a) => a.accuracy < 60).map((a) => a.testId).slice(0, 5).join(", ")
+    ? attempts.filter((a) => a.accuracy < 60).map((a) => testMap.get(a.testId)?.testName ?? "Untitled test").slice(0, 5).join(", ")
     : "Not enough data yet";
   const strong = attempts.length
-    ? attempts.filter((a) => a.accuracy >= 80).map((a) => a.testId).slice(0, 5).join(", ")
+    ? attempts.filter((a) => a.accuracy >= 80).map((a) => testMap.get(a.testId)?.testName ?? "Untitled test").slice(0, 5).join(", ")
     : "Not enough data yet";
   return `Student: ${user?.fullName ?? "Student"} | Plan: ${user?.tier ?? "Free"} | Target: ${user?.targetExamSub ?? "Not set"}\nCompleted test analysis (use titles, not IDs):\n${performance}\nLikely weak sets: ${weak}\nStrong sets: ${strong}`;
 }
 
 export async function answerAgenticMessage(userId: number, text: string): Promise<string> {
   const insights = await getUserInsights(userId);
+  const testTitles = await db.select({ testId: testSeriesTable.testId, testName: testSeriesTable.testName })
+    .from(testSeriesTable);
+  const titleMap = new Map(testTitles.map((test) => [test.testId, test.testName]));
   const cached = [...setAnalysisCache.entries()].slice(0, 12)
-    .map(([id, value]) => `${id}: topics=${value.analysis.topics.join(",")}; focus=${value.analysis.focus}; question intelligence=${value.analysis.questions.length} questions`).join("\n");
+    .map(([testId, value]) => {
+      const questionDetails = value.analysis.questions.map((question, index) =>
+        `Q${index + 1} "${question.question}": topics=${question.topics.join(", ") || "unknown"}; skills=${question.skills.join(", ") || "unknown"}; difficulty=${question.difficulty}; focus=${question.focus}`
+      ).join("\n");
+      return `Test title: ${titleMap.get(testId) ?? "Untitled test"}; topics=${value.analysis.topics.join(",")}; focus=${value.analysis.focus}\n${questionDetails}`;
+    }).join("\n");
   return askOpenRouter([
       { role: "system", content: `${BOT_AGENT_CONTEXT}
 You are the always-on Agentic AI strategist inside Series TestPro. You can act as a tutor, performance analyst, study planner, practice-set designer, revision coach, and exam accountability partner.
 Use the student's real context below. Be personal and actionable. If asked to do work, do it directly in the response. Never claim an action happened if it did not. Keep responses under 350 words, plain text, readable in Telegram.
 Never show internal test IDs to the user. Use test titles. Report average accuracy, weak topics, strong topics, topper score, and discrimination index only when available in the context; otherwise say that data is insufficient.
+You have access to question-level intelligence and the student's answer arrays. When a question was answered incorrectly, identify the question by its text/short title, explain the likely mistake, and recommend a correction. Never reveal an internal question ID or test ID.
 Student context:
 ${insights}
 Background question intelligence:

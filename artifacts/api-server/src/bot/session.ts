@@ -102,6 +102,7 @@ export interface UserSession {
   pendingAiTutor?: boolean;
   agenticActive?: boolean;
   agenticMessageIds?: number[];
+  agenticIdleTimer?: ReturnType<typeof setTimeout>;
 }
 
 const sessions = new Map<number, UserSession>();
@@ -130,5 +131,7 @@ export function clearSolution(userId: number): void {
 }
 
 export function clearAgenticSession(userId: number): void {
-  updateSession(userId, { agenticActive: false, agenticMessageIds: undefined, pendingAiTutor: false });
+  const session = getSession(userId);
+  if (session.agenticIdleTimer) clearTimeout(session.agenticIdleTimer);
+  updateSession(userId, { agenticActive: false, agenticMessageIds: undefined, pendingAiTutor: false, agenticIdleTimer: undefined });
 }
