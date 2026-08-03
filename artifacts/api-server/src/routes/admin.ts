@@ -34,6 +34,104 @@ function signValue(value: string): string {
   return `${value}.${hmac.digest("hex")}`;
 }
 
+type QuestionAnalyticsRow = {
+  index: number;
+  id: string;
+  question: string;
+  options: string[];
+  correctOptionIndex: number;
+  explanation: string;
+  attempts: number;
+  answered: number;
+  skipped: number;
+  correct: number;
+  wrong: number;
+  accuracy: number;
+  skipRate: number;
+  optionDistribution: Array<{ optionIndex: number; option: string; count: number; percentage: number; isCorrect: boolean }>;
+  difficulty: "Easy" | "Moderate" | "Hard" | "Very hard";
+  discrimination: number;
+};
+
+function buildQuestionAnalytics(
+  questions: QuestionData[],
+  history: Array<{ userAnswers: unknown }>,
+): QuestionAnalyticsRow[] {
+  return questions.map((question, index) => {
+    const counts = question.options.map(() => 0);
+    let attempts = 0;
+    let answered = 0;
+    let correct = 0;
+    for (const row of history) {
+      attempts++;
+      const answers = Array.isArray(row.userAnswers) ? row.userAnswers : [];
+      const answer = answers[index];
+      if (typeof answer !== "number" || answer < 0) continue;
+      answered++;
+      if (counts[answer] !== undefined) counts[answer]++;
+      if (answer === question.correctOptionIndex) correct++;
+    }
+    const wrong = answered - correct;
+    const skipped = attempts - answered;
+    const accuracy = answered ? (correct / answered) * 100 : 0;
+    const skipRate = attempts ? (skipped / attempts) * 100 : 0;
+    const optionDistribution = question.options.map((option, optionIndex) => ({
+      optionIndex,
+      option,
+      count: counts[optionIndex] ?? 0,
+      percentage: answered ? ((counts[optionIndex] ?? 0) / answered) * 100 : 0,
+      isCorrect: optionIndex === question.correctOptionIndex,
+    }));
+    const difficulty = accuracy >= 75 ? "Easy" : accuracy >= 50 ? "Moderate" : accuracy >= 25 ? "Hard" : "Very hard";
+    return {
+      index,
+      id: question.id ?? `q${index + 1}`,
+      question: question.question,
+      options: question.options,
+      correctOptionIndex: question.correctOptionIndex,
+      explanation: question.explanation ?? "",
+      attempts,
+      answered,
+      skipped,
+      correct,
+      wrong,
+      accuracy: Number(accuracy.toFixed(1)),
+      skipRate: Number(skipRate.toFixed(1)),
+      optionDistribution,
+      difficulty,
+      discrimination: 0,
+    };
+  });
+}
+
+function addQuestionDiscrimination(
+  rows: QuestionAnalyticsRow[],
+  history: Array<{ score: number; userAnswers: unknown }>,
+): QuestionAnalyticsRow[] {
+  if (history.length < 4) return rows;
+  const sorted = [...history].sort((a, b) => b.score - a.score);
+  const bandSize = Math.max(1, Math.ceil(sorted.length * 0.27));
+  const top = sorted.slice(0, bandSize);
+  const bottom = sorted.slice(-bandSize);
+  return rows.map((row) => {
+    const accuracyFor = (band: typeof top) => {
+      let answered = 0;
+      let correct = 0;
+      for (const attempt of band) {
+        const answers = Array.isArray(attempt.userAnswers) ? attempt.userAnswers : [];
+        const answer = answers[row.index];
+        if (typeof answer === "number" && answer >= 0) {
+          answered++;
+          if (answer === row.correctOptionIndex) correct++;
+        }
+      }
+      return answered ? correct / answered : 0;
+    };
+    const discrimination = (accuracyFor(top) - accuracyFor(bottom)) * 100;
+    return { ...row, discrimination: Number(discrimination.toFixed(1)) };
+  });
+}
+
 function verifyValue(signed: string): string | null {
   const parts = signed.split(".");
   if (parts.length < 2) return null;
@@ -430,6 +528,35 @@ router.get("/tests/:testId/analytics", requireAuth, async (req: Request, res: Re
   } catch (err) {
     logger.error({ err }, "Analytics error");
     res.status(500).json({ error: "Failed to load analytics" });
+  }
+});
+
+router.get("/tests/:testId/question-analytics", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const testId = String(req.params["testId"]);
+    const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
+    if (!test) { res.status(404).json({ error: "Test not found" }); return; }
+    const history = await db.select({
+      score: userHistoryTable.score,
+      userAnswers: userHistoryTable.userAnswers,
+    }).from(userHistoryTable).where(eq(userHistoryTable.testId, testId));
+    const questions = Array.isArray(test.questionsData) ? test.questionsData as QuestionData[] : [];
+    const rows = addQuestionDiscrimination(buildQuestionAnalytics(questions, history), history);
+    const hardest = [...rows].sort((a, b) => a.accuracy - b.accuracy).slice(0, 5).map((q) => q.index);
+    const easiest = [...rows].sort((a, b) => b.accuracy - a.accuracy).slice(0, 5).map((q) => q.index);
+    res.json({
+      testId, testName: test.testName, totalAttempts: history.length,
+      questions: rows, hardest, easiest,
+      insights: {
+        questionsTracked: rows.filter((q) => q.answered > 0).length,
+        averageQuestionAccuracy: rows.length ? Number((rows.reduce((sum, q) => sum + q.accuracy, 0) / rows.length).toFixed(1)) : 0,
+        highSkipQuestions: rows.filter((q) => q.skipRate >= 25).length,
+        hardQuestions: rows.filter((q) => q.difficulty === "Hard" || q.difficulty === "Very hard").length,
+      },
+    });
+  } catch (err) {
+    logger.error({ err }, "Question analytics error");
+    res.status(500).json({ error: "Failed to load question analytics" });
   }
 });
 
@@ -1484,10 +1611,19 @@ router.get("/custom-sets/:id/analytics", requireAuth, async (req: Request, res: 
       const [user] = await db.select({ fullName: usersTable.fullName }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
       return { userId, score, name: user?.fullName ?? String(userId) };
     }));
+    const questions = Array.isArray(set.questionsData) ? set.questionsData as QuestionData[] : [];
+    const questionAnalytics = addQuestionDiscrimination(buildQuestionAnalytics(questions, history), history);
     res.json({
       setId: id, testId: `custom_${id}`, testName: set.title, totalAttempts,
       avgScore: Number(avgScore.toFixed(2)), avgAccuracy: Number(avgAccuracy.toFixed(1)), bestScore, topScorers,
       scoreDistribution: ["0–20%", "20–40%", "40–60%", "60–80%", "80–100%"].map((range, index) => ({ range, count: buckets[index] })),
+      questions: questionAnalytics,
+      insights: {
+        questionsTracked: questionAnalytics.filter((q) => q.answered > 0).length,
+        averageQuestionAccuracy: questionAnalytics.length ? Number((questionAnalytics.reduce((sum, q) => sum + q.accuracy, 0) / questionAnalytics.length).toFixed(1)) : 0,
+        highSkipQuestions: questionAnalytics.filter((q) => q.skipRate >= 25).length,
+        hardQuestions: questionAnalytics.filter((q) => q.difficulty === "Hard" || q.difficulty === "Very hard").length,
+      },
     });
   } catch (err) {
     logger.error({ err }, "custom-set analytics failed");

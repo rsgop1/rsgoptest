@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { BarChart2, Users, Target, Trophy, TrendingUp } from "lucide-react";
+import { QuestionAnalyticsPanel } from "@/components/question-analytics-panel";
 
 interface AnalyticsData {
   testId: string;
@@ -17,6 +18,8 @@ interface AnalyticsData {
   bestScore: number;
   topScorers: Array<{ userId: number; score: number; name: string }>;
   scoreDistribution: Array<{ range: string; count: number }>;
+  questions?: any[];
+  insights?: any;
 }
 
 function useTestAnalytics(testId: string | null) {
@@ -26,6 +29,18 @@ function useTestAnalytics(testId: string | null) {
       const resp = await fetch(`/api/admin/tests/${testId}/analytics`, { credentials: "include" });
       if (!resp.ok) throw new Error("Failed to load analytics");
       return resp.json();
+    },
+    enabled: !!testId,
+  });
+}
+
+function useQuestionAnalytics(testId: string | null) {
+  return useQuery<any>({
+    queryKey: ["admin", "question-analytics", testId],
+    queryFn: async () => {
+      const response = await fetch(`/api/admin/tests/${testId}/question-analytics`, { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to load question analytics");
+      return response.json();
     },
     enabled: !!testId,
   });
@@ -72,6 +87,7 @@ export default function Analytics() {
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
   const { data: tests, isLoading: testsLoading } = useAdminListTests();
   const { data: analytics, isLoading: analyticsLoading } = useTestAnalytics(selectedTestId);
+  const { data: questionAnalytics, isLoading: questionAnalyticsLoading } = useQuestionAnalytics(selectedTestId);
 
   const maxDist = analytics ? Math.max(...analytics.scoreDistribution.map(d => d.count), 1) : 1;
 
@@ -174,6 +190,15 @@ export default function Analytics() {
               </CardContent>
             </Card>
           </div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Advanced question analysis</CardTitle>
+              <p className="text-sm text-muted-foreground">Real option-level performance from saved user answers.</p>
+            </CardHeader>
+            <CardContent>
+              {questionAnalyticsLoading ? <Skeleton className="h-48 w-full" /> : <QuestionAnalyticsPanel questions={questionAnalytics?.questions} insights={questionAnalytics?.insights} totalAttempts={questionAnalytics?.totalAttempts ?? analytics.totalAttempts} />}
+            </CardContent>
+          </Card>
         </>
       )}
     </div>

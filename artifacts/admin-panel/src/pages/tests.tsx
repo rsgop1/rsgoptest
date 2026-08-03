@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Trash2, BarChart2, Clock, Pencil, ChevronDown, WandSparkles, Save, PlusCircle, X } from "lucide-react";
 import { useLocation } from "wouter";
+import { QuestionAnalyticsPanel } from "@/components/question-analytics-panel";
 
 const BASE = "/api/admin";
 
@@ -490,11 +491,16 @@ export default function Tests() {
       </Sheet>
 
       <Sheet open={!!analyticsTestId} onOpenChange={(open) => !open && setAnalyticsTestId(null)}>
-        <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+        <SheetContent className="w-full sm:max-w-5xl overflow-y-auto">
           <SheetHeader><SheetTitle>Test analytics</SheetTitle><SheetDescription>{analyticsData?.testName ?? "Performance insights for this test series."}</SheetDescription></SheetHeader>
           <div className="py-5 space-y-5">
             {analyticsLoading && <p className="text-sm text-muted-foreground">Loading analytics…</p>}
-            {analyticsData && <><div className="grid grid-cols-2 gap-3">{[["Attempts", analyticsData.totalAttempts], ["Avg score", analyticsData.avgScore], ["Accuracy", `${analyticsData.avgAccuracy}%`], ["Best score", analyticsData.bestScore]].map(([label, value]) => <div key={String(label)} className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-bold mt-1">{value}</p></div>)}</div><div className="rounded-lg border p-4 space-y-3"><h3 className="font-semibold">Score distribution</h3>{analyticsData.scoreDistribution.map((item: any) => <div key={item.range} className="flex justify-between text-sm"><span>{item.range}</span><span className="font-semibold">{item.count}</span></div>)}</div><div className="rounded-lg border p-4"><h3 className="font-semibold mb-3">Top scorers</h3>{analyticsData.topScorers.length ? analyticsData.topScorers.map((item: any) => <div key={item.userId} className="flex justify-between text-sm py-1"><span>{item.name}</span><span className="font-semibold">{item.score}</span></div>) : <p className="text-sm text-muted-foreground">No attempts yet.</p>}</div></>}
+            {analyticsData && <div className="space-y-5">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">{[["Attempts", analyticsData.totalAttempts], ["Avg score", analyticsData.avgScore], ["Accuracy", `${analyticsData.avgAccuracy}%`], ["Best score", analyticsData.bestScore]].map(([label, value]) => <div key={String(label)} className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-bold mt-1">{value}</p></div>)}</div>
+              <div className="rounded-lg border p-4 space-y-3"><h3 className="font-semibold">Score distribution</h3>{analyticsData.scoreDistribution.map((item: any) => <div key={item.range} className="flex justify-between text-sm"><span>{item.range}</span><span className="font-semibold">{item.count}</span></div>)}</div>
+              <div className="rounded-lg border p-4"><h3 className="font-semibold mb-3">Top scorers</h3>{analyticsData.topScorers.length ? analyticsData.topScorers.map((item: any) => <div key={item.userId} className="flex justify-between text-sm py-1"><span>{item.name}</span><span className="font-semibold">{item.score}</span></div>) : <p className="text-sm text-muted-foreground">No attempts yet.</p>}</div>
+              <QuestionAnalyticsPanel questions={analyticsData.questions} insights={analyticsData.insights} totalAttempts={analyticsData.totalAttempts} />
+            </div>}
           </div>
         </SheetContent>
       </Sheet>

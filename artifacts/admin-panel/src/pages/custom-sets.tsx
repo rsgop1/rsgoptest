@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { Trash2, ExternalLink, FileText, Search, RefreshCw, Bot, Eye, Clock3, UserRound, Link2, Pencil, BarChart2, Globe, GlobeLock } from "lucide-react";
+import { QuestionAnalyticsPanel } from "@/components/question-analytics-panel";
 
 interface CustomQuestion {
   id?: string;
@@ -431,6 +432,6 @@ function CustomSetAnalytics({ set }: { set: CustomSet }) {
   return <div className="py-6 space-y-5"><SheetHeader><SheetTitle>{set.title} analytics</SheetTitle><SheetDescription>Performance for this AI-generated custom test.</SheetDescription></SheetHeader>
     {isLoading && <p className="text-sm text-muted-foreground">Loading analytics…</p>}
     {error && <p className="text-sm text-destructive">Unable to load analytics.</p>}
-    {data && <><div className="grid grid-cols-2 gap-3">{[["Attempts", data.totalAttempts], ["Avg score", data.avgScore], ["Accuracy", `${data.avgAccuracy}%`], ["Best score", data.bestScore]].map(([label, value]) => <div key={String(label)} className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-bold mt-1">{value}</p></div>)}</div><div className="rounded-lg border p-4 space-y-3"><h3 className="font-semibold">Score distribution</h3>{data.scoreDistribution.map((item: any) => <div key={item.range} className="flex justify-between text-sm"><span>{item.range}</span><span className="font-semibold">{item.count}</span></div>)}</div><div className="rounded-lg border p-4"><h3 className="font-semibold mb-3">Top scorers</h3>{data.topScorers.length ? data.topScorers.map((item: any) => <div key={item.userId} className="flex justify-between text-sm py-1"><span>{item.name}</span><span className="font-semibold">{item.score}</span></div>) : <p className="text-sm text-muted-foreground">No attempts yet.</p>}</div></>}
+    {data && <><div className="grid grid-cols-2 gap-3">{[["Attempts", data.totalAttempts], ["Avg score", data.avgScore], ["Accuracy", `${data.avgAccuracy}%`], ["Best score", data.bestScore]].map(([label, value]) => <div key={String(label)} className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-bold mt-1">{value}</p></div>)}</div><div className="rounded-lg border p-4 space-y-3"><h3 className="font-semibold">Score distribution</h3>{data.scoreDistribution.map((item: any) => <div key={item.range} className="flex justify-between text-sm"><span>{item.range}</span><span className="font-semibold">{item.count}</span></div>)}</div><div className="rounded-lg border p-4"><h3 className="font-semibold mb-3">Top scorers</h3>{data.topScorers.length ? data.topScorers.map((item: any) => <div key={item.userId} className="flex justify-between text-sm py-1"><span>{item.name}</span><span className="font-semibold">{item.score}</span></div>) : <p className="text-sm text-muted-foreground">No attempts yet.</p>}</div><QuestionAnalyticsPanel questions={data.questions} insights={data.insights} totalAttempts={data.totalAttempts} /></>}
   </div>;
 }
