@@ -20,3 +20,4 @@
 - [PDF custom-set OCR pipeline](pdf-custom-set-ocr.md) — selectable PDFs use text extraction; image PDFs render pages and use vision OCR before grounded quiz generation.
 - [AI provider secrets](ai-provider-secrets.md) — provider selection is DB config, but API keys stay in Replit Secrets and are never stored through the admin app.
 - [Premium activation and coupons](premium-activation-coupons.md) — all Premium grants share one activation path; 100% coupons grant Premium and VIP instantly with redemption audit.
+- [Admin user 360 and alerts](admin-user-360-alerts.md) — consolidated user profile endpoint powers profile, commerce, activity, support, and actionable dashboard alerts.

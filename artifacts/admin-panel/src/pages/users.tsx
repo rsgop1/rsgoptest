@@ -31,6 +31,10 @@ import {
   ShieldOff,
   CalendarDays,
   Activity,
+  CreditCard,
+  Ticket,
+  FileText,
+  RefreshCw,
 } from "lucide-react";
 
 function isPremium(user: AdminUser) {
@@ -42,6 +46,17 @@ function premiumExpiryLabel(user: AdminUser) {
   return format(new Date(user.premiumExpiry), "MMM d, yyyy");
 }
 
+type User360 = {
+  access: { activePremium: boolean; premiumDaysLeft: number; vipEligible: boolean };
+  summary: { totalAttempts: number; averageAccuracy: number; wrongQuestions: number; supportOpen: number; customSets: number };
+  history: Array<{ id: number; testName: string; score: number; maxScore: number; accuracy: number; completedAt: string }>;
+  payments: Array<{ id: number; method: string; amount: number; status: string; submittedAt: string }>;
+  redemptions: Array<{ id: number; code: string; campaignName: string | null; grantedPremiumDays: number; redeemedAt: string }>;
+  tickets: Array<{ id: number; category: string; status: string; priority: string; message: string }>;
+  customSets: Array<{ id: number; title: string; status: string; sourceFileName: string | null; failReason: string | null }>;
+  achievements: Array<{ id: number; title?: string; name?: string; awardedAt: string }>;
+};
+
 export default function Users() {
   const { data: users, isLoading } = useAdminListUsers();
   const queryClient = useQueryClient();
@@ -49,6 +64,16 @@ export default function Users() {
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
   const [premiumDays, setPremiumDays] = useState("30");
   const [message, setMessage] = useState("");
+  const [activeSection, setActiveSection] = useState<"overview" | "activity" | "commerce" | "support">("overview");
+  const { data: user360, isLoading: user360Loading, refetch: refetchUser360 } = useQuery<User360>({
+    queryKey: ["admin-user-360", selectedUser?.userId],
+    enabled: Boolean(selectedUser),
+    queryFn: async () => {
+      const response = await fetch(`/api/admin/users/${selectedUser!.userId}/360`, { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to load user profile");
+      return response.json();
+    },
+  });
   const { data: premiumOverview } = useQuery<{
     activePremium: number;
     expiringSoon: number;
@@ -113,6 +138,7 @@ export default function Users() {
     setSelectedUser(user);
     setPremiumDays("30");
     setMessage("");
+    setActiveSection("overview");
   };
 
   const handleGrant = () => {
@@ -204,7 +230,7 @@ export default function Users() {
       </Card>
 
       <Sheet open={!!selectedUser} onOpenChange={(open) => !open && setSelectedUser(null)}>
-        <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
+        <SheetContent className="w-full sm:max-w-3xl overflow-y-auto">
           <SheetHeader>
             <SheetTitle className="flex items-center gap-2"><Settings2 className="h-5 w-5 text-primary" />Manage user</SheetTitle>
             <SheetDescription>{selectedUser?.fullName} · Telegram ID {selectedUser?.userId}</SheetDescription>
@@ -212,16 +238,35 @@ export default function Users() {
 
           {selectedUser && (
             <div className="space-y-5 py-5">
+              {user360Loading && <Skeleton className="h-56 w-full" />}
+              {user360 && (
+                <>
+              <div className="flex gap-1 overflow-x-auto rounded-lg bg-muted p-1">
+                {([
+                  ["overview", "Overview"],
+                  ["activity", "Tests & AI"],
+                  ["commerce", "Payments & Coupons"],
+                  ["support", "Support & Sets"],
+                ] as const).map(([value, label]) => (
+                  <Button key={value} variant={activeSection === value ? "default" : "ghost"} size="sm" className="whitespace-nowrap" onClick={() => setActiveSection(value)}>{label}</Button>
+                ))}
+              </div>
               <div className="rounded-xl border bg-muted/30 p-4">
                 <div className="flex items-center justify-between">
                   <div><p className="font-semibold">{selectedUser.fullName}</p><p className="text-sm text-muted-foreground">{selectedUser.username ? `@${selectedUser.username}` : "No username"}</p></div>
                   {isPremium(selectedUser) ? <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100"><Crown className="h-3 w-3 mr-1" />Premium</Badge> : <Badge variant="secondary">Free</Badge>}
                 </div>
-                <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-sm">
                   <div><span className="text-muted-foreground">Premium till</span><p className="font-medium">{premiumExpiryLabel(selectedUser)}</p></div>
-                  <div><span className="text-muted-foreground">Accuracy</span><p className="font-medium">{Number(selectedUser.accuracyRate ?? 0).toFixed(1)}%</p></div>
-                  <div><span className="text-muted-foreground">Tests attempted</span><p className="font-medium">{selectedUser.totalTestsTaken}</p></div>
+                  <div><span className="text-muted-foreground">Avg accuracy</span><p className="font-medium">{user360.summary.averageAccuracy.toFixed(1)}%</p></div>
+                  <div><span className="text-muted-foreground">Tests attempted</span><p className="font-medium">{user360.summary.totalAttempts}</p></div>
                   <div><span className="text-muted-foreground">Referrals</span><p className="font-medium">{selectedUser.referralCount}</p></div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Badge variant={user360.access.activePremium ? "default" : "secondary"}>{user360.access.activePremium ? `💎 ${user360.access.premiumDaysLeft} days left` : "Free access"}</Badge>
+                  <Badge variant={user360.access.vipEligible ? "default" : "secondary"}>{user360.access.vipEligible ? "VIP eligible" : "No VIP access"}</Badge>
+                  <Badge variant="outline">{user360.summary.wrongQuestions} wrong questions</Badge>
+                  <Badge variant="outline">{user360.summary.supportOpen} open tickets</Badge>
                 </div>
               </div>
 
@@ -249,6 +294,31 @@ export default function Users() {
                 </div>
                 <Button variant="outline" className="w-full" onClick={() => resetUsage.mutate({ userId: selectedUser.userId })} disabled={resetUsage.isPending}><RotateCcw className="h-4 w-4 mr-2" />{resetUsage.isPending ? "Resetting…" : "Reset today's AI limits"}</Button>
               </section>
+
+              {activeSection === "overview" && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Card><CardContent className="p-4"><h3 className="font-semibold flex items-center gap-2"><Activity className="h-4 w-4" />Account intelligence</h3><div className="mt-3 space-y-2 text-sm"><p>Joined: {format(new Date(selectedUser.joinedAt), "MMM d, yyyy HH:mm")}</p><p>Exam: {selectedUser.targetExamMain ?? "Not set"} / {selectedUser.targetExamSub ?? "Not set"}</p><p>AI doubts today: {selectedUser.aiDoubtCount}</p><p>Anonymous doubts: {selectedUser.anonDoubtsUsed}</p></div></CardContent></Card>
+                  <Card><CardContent className="p-4"><h3 className="font-semibold flex items-center gap-2"><Trophy className="h-4 w-4" />Achievements</h3><div className="mt-3 space-y-2 text-sm">{user360.achievements.length ? user360.achievements.slice(0, 6).map((a) => <div key={a.id} className="flex justify-between"><span>{a.title ?? a.name ?? "Achievement"}</span><span className="text-muted-foreground">{format(new Date(a.awardedAt), "MMM d")}</span></div>) : <p className="text-muted-foreground">No achievements yet.</p>}</div></CardContent></Card>
+                </div>
+              )}
+              {activeSection === "activity" && (
+                <section className="rounded-xl border p-4"><h3 className="font-semibold flex items-center gap-2"><FileText className="h-4 w-4" />Recent test history</h3><div className="mt-3 overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Test</TableHead><TableHead>Score</TableHead><TableHead>Accuracy</TableHead><TableHead>Completed</TableHead></TableRow></TableHeader><TableBody>{user360.history.slice(0, 15).map((h) => <TableRow key={h.id}><TableCell className="max-w-56 truncate">{h.testName}</TableCell><TableCell>{h.score}/{h.maxScore}</TableCell><TableCell>{Number(h.accuracy).toFixed(1)}%</TableCell><TableCell>{format(new Date(h.completedAt), "MMM d, HH:mm")}</TableCell></TableRow>)}</TableBody></Table>{!user360.history.length && <p className="text-sm text-muted-foreground py-4">No completed tests.</p>}</div></section>
+              )}
+              {activeSection === "commerce" && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <section className="rounded-xl border p-4"><h3 className="font-semibold flex items-center gap-2"><CreditCard className="h-4 w-4" />Payments</h3><div className="mt-3 space-y-2 text-sm">{user360.payments.map((p) => <div key={p.id} className="flex justify-between gap-2 border-b pb-2"><span>{p.method} · {p.amount}</span><Badge variant="outline">{p.status}</Badge></div>)}{!user360.payments.length && <p className="text-muted-foreground">No payments.</p>}</div></section>
+                  <section className="rounded-xl border p-4"><h3 className="font-semibold flex items-center gap-2"><Crown className="h-4 w-4" />Coupons used</h3><div className="mt-3 space-y-2 text-sm">{user360.redemptions.map((r) => <div key={r.id} className="flex justify-between gap-2 border-b pb-2"><span><b>{r.code}</b><br /><span className="text-xs text-muted-foreground">{r.campaignName ?? "No campaign"}</span></span><span className="text-right">{r.grantedPremiumDays}d<br /><span className="text-xs text-muted-foreground">{format(new Date(r.redeemedAt), "MMM d")}</span></span></div>)}{!user360.redemptions.length && <p className="text-muted-foreground">No coupon redemptions.</p>}</div></section>
+                </div>
+              )}
+              {activeSection === "support" && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <section className="rounded-xl border p-4"><h3 className="font-semibold flex items-center gap-2"><Ticket className="h-4 w-4" />Support tickets</h3><div className="mt-3 space-y-2 text-sm">{user360.tickets.map((t) => <div key={t.id} className="border-b pb-2"><div className="flex justify-between"><b>#{t.id} · {t.category}</b><Badge variant={t.priority === "urgent" ? "destructive" : "outline"}>{t.status}</Badge></div><p className="mt-1 line-clamp-2 text-muted-foreground">{t.message}</p></div>)}{!user360.tickets.length && <p className="text-muted-foreground">No support tickets.</p>}</div></section>
+                  <section className="rounded-xl border p-4"><h3 className="font-semibold flex items-center gap-2"><FileText className="h-4 w-4" />Custom PDF sets</h3><div className="mt-3 space-y-2 text-sm">{user360.customSets.map((s) => <div key={s.id} className="flex justify-between gap-2 border-b pb-2"><span className="truncate">{s.title}<br /><span className="text-xs text-muted-foreground">{s.sourceFileName ?? "No source name"}</span></span><Badge variant={s.status === "failed" ? "destructive" : "outline"}>{s.status}</Badge></div>)}{!user360.customSets.length && <p className="text-muted-foreground">No custom sets.</p>}</div></section>
+                </div>
+              )}
+              <div className="flex justify-end"><Button variant="outline" size="sm" onClick={() => void refetchUser360()}><RefreshCw className="h-4 w-4 mr-2" />Refresh profile</Button></div>
+              </>
+              )}
             </div>
           )}
         </SheetContent>

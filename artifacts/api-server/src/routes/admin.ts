@@ -16,6 +16,7 @@ import {
   couponRedemptionsTable,
   userCustomSetsTable,
   supportTicketsTable,
+  wrongQuestionsTable,
 } from "@workspace/db";
 import { eq, and, count, gte, sql, desc, gt, lt, inArray } from "drizzle-orm";
 import type { QuestionData } from "@workspace/db";
@@ -220,6 +221,40 @@ router.get("/stats", requireAuth, async (_req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "Admin stats error");
     res.status(500).json({ error: "Failed to load stats" });
+  }
+});
+
+router.get("/alerts", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const now = new Date();
+    const expiryWindow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const staleJobsAt = new Date(now.getTime() - 15 * 60 * 1000);
+    const ticketDueAt = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const [pendingPayments, expiringPremium, failedSets, staleSets, overdueTickets, vipFailures] = await Promise.all([
+      db.select({ id: paymentsTable.id, userId: paymentsTable.userId, amount: paymentsTable.amount, submittedAt: paymentsTable.submittedAt })
+        .from(paymentsTable).where(eq(paymentsTable.status, "Pending")).orderBy(desc(paymentsTable.submittedAt)).limit(10),
+      db.select({ userId: usersTable.userId, fullName: usersTable.fullName, premiumExpiry: usersTable.premiumExpiry })
+        .from(usersTable).where(and(eq(usersTable.tier, "Premium"), gt(usersTable.premiumExpiry, now), lt(usersTable.premiumExpiry, expiryWindow))).limit(10),
+      db.select({ id: userCustomSetsTable.id, userId: userCustomSetsTable.userId, title: userCustomSetsTable.title, failReason: userCustomSetsTable.failReason })
+        .from(userCustomSetsTable).where(eq(userCustomSetsTable.status, "failed")).orderBy(desc(userCustomSetsTable.createdAt)).limit(10),
+      db.select({ id: userCustomSetsTable.id, userId: userCustomSetsTable.userId, title: userCustomSetsTable.title, createdAt: userCustomSetsTable.createdAt })
+        .from(userCustomSetsTable).where(and(eq(userCustomSetsTable.status, "processing"), lt(userCustomSetsTable.createdAt, staleJobsAt))).limit(10),
+      db.select({ id: supportTicketsTable.id, userId: supportTicketsTable.userId, category: supportTicketsTable.category, priority: supportTicketsTable.priority, createdAt: supportTicketsTable.createdAt })
+        .from(supportTicketsTable).where(and(eq(supportTicketsTable.status, "open"), lt(supportTicketsTable.createdAt, ticketDueAt))).orderBy(desc(supportTicketsTable.createdAt)).limit(10),
+      db.select({ count: count() }).from(couponRedemptionsTable).where(eq(couponRedemptionsTable.outcome, "vip_failed")),
+    ]);
+    const alerts = [
+      ...pendingPayments.map((item) => ({ id: `payment-${item.id}`, severity: "high", type: "payment", title: `Payment pending for user ${item.userId}`, detail: `₹${item.amount} · submitted ${item.submittedAt.toISOString()}`, href: "/payments" })),
+      ...expiringPremium.map((item) => ({ id: `premium-${item.userId}`, severity: "medium", type: "premium", title: `${item.fullName} Premium expires soon`, detail: item.premiumExpiry?.toISOString() ?? "", href: "/users" })),
+      ...failedSets.map((item) => ({ id: `set-failed-${item.id}`, severity: "high", type: "custom-set", title: `Custom set failed: ${item.title}`, detail: item.failReason ?? "No failure reason recorded", href: "/custom-sets" })),
+      ...staleSets.map((item) => ({ id: `set-stale-${item.id}`, severity: "medium", type: "custom-set", title: `Custom set stuck: ${item.title}`, detail: `User ${item.userId} · started ${item.createdAt.toISOString()}`, href: "/custom-sets" })),
+      ...overdueTickets.map((item) => ({ id: `ticket-${item.id}`, severity: item.priority === "urgent" ? "high" : "medium", type: "support", title: `Support ticket #${item.id} overdue`, detail: `${item.priority} · ${item.category} · user ${item.userId}`, href: "/support" })),
+      ...(Number(vipFailures[0]?.count ?? 0) > 0 ? [{ id: "vip-failures", severity: "high", type: "vip", title: "VIP invite failures need review", detail: `${vipFailures[0]?.count ?? 0} failed VIP grants recorded`, href: "/settings" }] : []),
+    ];
+    res.json({ alerts, generatedAt: now.toISOString() });
+  } catch (err) {
+    logger.error({ err }, "Admin alerts error");
+    res.status(500).json({ error: "Failed to load admin alerts" });
   }
 });
 
@@ -907,6 +942,47 @@ router.get("/users", requireAuth, async (_req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "Admin list users error");
     res.status(500).json({ error: "Failed to load users" });
+  }
+});
+
+router.get("/users/:userId/360", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = Number(req.params["userId"]);
+    if (!Number.isSafeInteger(userId) || userId <= 0) { res.status(400).json({ error: "Invalid user ID" }); return; }
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    const [history, payments, redemptions, tickets, customSets, achievements, wrongQuestions] = await Promise.all([
+      db.select({ history: userHistoryTable, testName: testSeriesTable.testName })
+        .from(userHistoryTable).leftJoin(testSeriesTable, eq(userHistoryTable.testId, testSeriesTable.testId))
+        .where(eq(userHistoryTable.userId, userId)).orderBy(desc(userHistoryTable.completedAt)).limit(30),
+      db.select().from(paymentsTable).where(eq(paymentsTable.userId, userId)).orderBy(desc(paymentsTable.submittedAt)).limit(30),
+      db.select({ redemption: couponRedemptionsTable, code: couponCodesTable.code, campaignName: couponCodesTable.campaignName })
+        .from(couponRedemptionsTable).leftJoin(couponCodesTable, eq(couponRedemptionsTable.couponId, couponCodesTable.id))
+        .where(eq(couponRedemptionsTable.userId, userId)).orderBy(desc(couponRedemptionsTable.redeemedAt)).limit(30),
+      db.select().from(supportTicketsTable).where(eq(supportTicketsTable.userId, userId)).orderBy(desc(supportTicketsTable.updatedAt)).limit(30),
+      db.select({ id: userCustomSetsTable.id, title: userCustomSetsTable.title, status: userCustomSetsTable.status, sourceFileName: userCustomSetsTable.sourceFileName, questionCount: userCustomSetsTable.questionCount, failReason: userCustomSetsTable.failReason, createdAt: userCustomSetsTable.createdAt, completedAt: userCustomSetsTable.completedAt })
+        .from(userCustomSetsTable).where(eq(userCustomSetsTable.userId, userId)).orderBy(desc(userCustomSetsTable.createdAt)).limit(30),
+      db.select().from(achievementsTable).where(eq(achievementsTable.userId, userId)).orderBy(desc(achievementsTable.awardedAt)).limit(30),
+      db.select().from(wrongQuestionsTable).where(eq(wrongQuestionsTable.userId, userId)).orderBy(desc(wrongQuestionsTable.id)).limit(30),
+    ]);
+    const activePremium = user.tier === "Premium" && !!user.premiumExpiry && user.premiumExpiry > new Date();
+    const totalAttempts = history.length;
+    const accuracy = totalAttempts ? history.reduce((sum, row) => sum + Number(row.history.accuracy), 0) / totalAttempts : 0;
+    res.json({
+      user: { ...user, premiumExpiry: user.premiumExpiry?.toISOString() ?? null, joinedAt: user.joinedAt.toISOString() },
+      access: { activePremium, premiumDaysLeft: activePremium ? Math.ceil((user.premiumExpiry!.getTime() - Date.now()) / 86400000) : 0, vipEligible: activePremium },
+      summary: { totalAttempts, averageAccuracy: Number(accuracy.toFixed(2)), wrongQuestions: wrongQuestions.length, supportOpen: tickets.filter((ticket) => ticket.status === "open").length, customSets: customSets.length },
+      history: history.map((row) => ({ ...row.history, testName: row.testName ?? row.history.testId, completedAt: row.history.completedAt.toISOString() })),
+      payments: payments.map((payment) => ({ ...payment, submittedAt: payment.submittedAt.toISOString() })),
+      redemptions: redemptions.map((row) => ({ ...row.redemption, code: row.code ?? "Unknown", campaignName: row.campaignName, redeemedAt: row.redemption.redeemedAt.toISOString() })),
+      tickets: tickets.map((ticket) => ({ ...ticket, createdAt: ticket.createdAt.toISOString(), updatedAt: ticket.updatedAt.toISOString() })),
+      customSets: customSets.map((set) => ({ ...set, createdAt: set.createdAt.toISOString(), completedAt: set.completedAt?.toISOString() ?? null })),
+      achievements: achievements.map((achievement) => ({ ...achievement, awardedAt: achievement.awardedAt.toISOString() })),
+      wrongQuestions,
+    });
+  } catch (err) {
+    logger.error({ err }, "Admin user 360 error");
+    res.status(500).json({ error: "Failed to load user profile" });
   }
 });
 
