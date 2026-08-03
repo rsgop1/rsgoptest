@@ -20,6 +20,7 @@ import { trySetGroupTitles } from "./achievements.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
+import { homeKeyboard } from "./navigation.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -279,7 +280,9 @@ export function registerStartHandlers(bot: Bot): void {
         const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, from.id)).limit(1);
         const sub = user?.targetExamSub ?? "Not set";
         const tier = user?.tier ?? "Free";
-         await ctx.reply(dashboardMsg(from.first_name, sub, tier, refLink));
+          await ctx.reply(dashboardMsg(from.first_name, sub, tier, refLink), {
+            reply_markup: homeKeyboard(),
+          });
         await trySetGroupTitles(from.id).catch(() => {});
       }
     } catch (err) {

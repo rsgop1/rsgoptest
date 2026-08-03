@@ -20,6 +20,7 @@ type LiveSession = {
   timer: ReturnType<typeof setTimeout> | null;
   scores: Map<number, LiveScore>;
   answers: Map<number, Map<string, boolean>>;
+  pollMessageIds: number[];
 };
 const liveSessions = new Map<number, LiveSession>();
 
@@ -27,8 +28,17 @@ export function stopLiveTestSession(liveTestId: number): boolean {
   const session = liveSessions.get(liveTestId);
   if (!session) return false;
   if (session.timer) clearTimeout(session.timer);
+  void cleanupLivePolls(session);
   liveSessions.delete(liveTestId);
   return true;
+}
+
+async function cleanupLivePolls(session: LiveSession): Promise<void> {
+  const api = getApi();
+  for (const messageId of session.pollMessageIds) {
+    try { await api.stopPoll(session.groupId, messageId); } catch {}
+    try { await api.deleteMessage(session.groupId, messageId); } catch {}
+  }
 }
 
 function escMd(text: string): string {
@@ -171,7 +181,7 @@ export async function startLiveTest(liveTestId: number): Promise<void> {
   if (!questions.length) return;
   const session: LiveSession = {
     liveTestId, groupId, questions, title: liveTest.title, currentIndex: 0,
-    pollId: null, timer: null, scores: new Map(), answers: new Map(),
+    pollId: null, timer: null, scores: new Map(), answers: new Map(), pollMessageIds: [],
   };
   liveSessions.set(liveTestId, session);
   await db.update(liveTestsTable).set({ status: "live", currentQuestionIndex: 0 }).where(eq(liveTestsTable.id, liveTestId));
@@ -191,6 +201,7 @@ async function sendNextGroupPoll(session: LiveSession, timerSeconds: number): Pr
       explanation: q.explanation?.slice(0, 200), open_period: timerSeconds, is_anonymous: false,
     });
     session.pollId = poll.poll.id;
+    session.pollMessageIds.push(poll.message_id);
     await db.update(liveTestsTable).set({
       currentQuestionIndex: session.currentIndex, currentPollId: poll.poll.id, currentPollMessageId: poll.message_id,
     }).where(eq(liveTestsTable.id, session.liveTestId));
@@ -213,6 +224,7 @@ async function postLiveLeaderboard(liveTestId: number, sessionScores?: Map<numbe
   if (!liveTest) return;
 
   const groupId = liveTest.groupChatId;
+  const activeSession = liveSessions.get(liveTestId);
 
   const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, liveTest.testId)).limit(1);
   const qCount = test && Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 1;
@@ -221,6 +233,8 @@ async function postLiveLeaderboard(liveTestId: number, sessionScores?: Map<numbe
     await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, liveTestId));
     return;
   }
+
+  if (activeSession) await cleanupLivePolls(activeSession);
 
   const entries: Array<{ fullName: string; score: number; correct: number; total: number }> = [];
   if (sessionScores) {

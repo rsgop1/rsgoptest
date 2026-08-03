@@ -162,6 +162,17 @@ async function deletePollMessages(userId: number, messageIds: number[]): Promise
   }
 }
 
+export async function clearQuizPolls(userId: number): Promise<void> {
+  const quiz = getSession(userId).quiz;
+  if (!quiz) return;
+  if (quiz.timer) clearTimeout(quiz.timer);
+  if (quiz.currentPollMessageId) {
+    try { await getApi().stopPoll(userId, quiz.currentPollMessageId); } catch {}
+  }
+  await deletePollMessages(userId, quiz.pollMessageIds);
+  clearQuiz(userId);
+}
+
 export async function startQuizForUser(
   userId: number,
   test: { testId: string; testName: string; questionsData: unknown; timerSeconds: number | null; positiveMarking: number; negativeMarking: number },
@@ -660,7 +671,10 @@ Keep total response under 180 words. Plain English only. No bullet symbols excep
 
   bot.callbackQuery("go_test_series", async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.reply("📚 Use /test\\_series to browse all available tests\\.", { parse_mode: "MarkdownV2" });
+    await ctx.editMessageText("📚 Use /test\\_series to browse all available tests\\.", {
+      parse_mode: "MarkdownV2",
+      reply_markup: new InlineKeyboard().text("🏠 Home", "nav_home"),
+    });
   });
 
   bot.callbackQuery(/^reattempt_/, async (ctx) => {

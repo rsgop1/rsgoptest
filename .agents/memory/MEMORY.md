@@ -14,3 +14,4 @@
 - [Admin support workspace](admin-support-workspace.md) — `/support` is the real support_tickets inbox; keep it separate from question reports.
 - [Admin preview cookie](admin-preview-cookie.md) — preview auth cookies must be proxy-aware or React admin API calls appear empty with 401s.
 - [VIP access control](vip-access-control.md) — Premium VIP group access uses expiring one-member invite links plus scheduled expiry removal; group ID/config lives in global config.
+- [Bot Study Hub navigation](bot-study-hub.md) — `/menu` and returning `/start` use inline navigation; commands remain as backward-compatible fallbacks.

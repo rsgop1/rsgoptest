@@ -146,6 +146,13 @@ export function registerCommandHandlers(bot: Bot): void {
       await ctx.reply("❌ No active test to stop\\. Use /test\\_series to start one\\.", { parse_mode: "MarkdownV2" });
       return;
     }
+    const pollIds = [...(session.quiz.pollMessageIds ?? [])];
+    if (session.quiz.currentPollMessageId) {
+      try { await ctx.api.stopPoll(userId, session.quiz.currentPollMessageId); } catch {}
+    }
+    for (const messageId of pollIds) {
+      try { await ctx.api.deleteMessage(userId, messageId); } catch {}
+    }
     clearQuiz(userId);
     emitTelemetry(`User ${userId} stopped test manually`);
     await ctx.reply(
