@@ -4,7 +4,7 @@ import { db } from "@workspace/db";
 import { userCustomSetsTable, usersTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 import { randomBytes } from "crypto";
-import { mkdtemp, writeFile, rm } from "fs/promises";
+import { mkdtemp, writeFile, rm, readdir, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { execFile } from "child_process";
@@ -14,7 +14,7 @@ import { getApi } from "../api-instance.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 import type { QuestionData } from "@workspace/db";
-import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
+import { askOpenRouter, askOpenRouterVision, BOT_HELP_CONTEXT } from "../ai.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,7 +28,7 @@ function generateShareToken(): string {
 
 // ─── PDF text extraction ───────────────────────────────────────────────────────
 
-async function extractTextFromPdf(fileId: string): Promise<string> {
+async function extractTextFromPdf(fileId: string): Promise<{ text: string; sourceMode: "text" | "ocr" | "mixed" }> {
   const api = getApi();
   const file = await api.getFile(fileId);
   const filePath = file.file_path;
@@ -46,27 +46,54 @@ async function extractTextFromPdf(fileId: string): Promise<string> {
   const outputPath = join(workDir, "source.txt");
   try {
     await writeFile(inputPath, buffer);
-    await execFileAsync("pdftotext", ["-layout", "-enc", "UTF-8", inputPath, outputPath], {
-      timeout: 45_000,
+    let text = "";
+    try {
+      await execFileAsync("pdftotext", ["-layout", "-enc", "UTF-8", inputPath, outputPath], {
+        timeout: 45_000,
+        maxBuffer: 2 * 1024 * 1024,
+      });
+      const extracted = await readFile(outputPath, "utf8");
+      text = extracted
+        .replace(/\u0000/g, " ")
+        .replace(/[ \t]+/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("ENOENT")) {
+        throw new Error("PDF extraction tools are unavailable on the server.");
+      }
+      // Some image-only PDFs make pdftotext exit non-zero. Continue to OCR.
+      text = "";
+    }
+
+    if (text.length >= 100) {
+      return { text: text.slice(0, 50000), sourceMode: "text" };
+    }
+    // Scanned/image-only PDFs have little or no text layer. Render their pages
+    // and send page images to the vision model for careful transcription.
+    await execFileAsync("pdftoppm", ["-png", "-r", "160", inputPath, join(workDir, "page")], {
+      timeout: 180_000,
       maxBuffer: 2 * 1024 * 1024,
     });
-    const { readFile } = await import("fs/promises");
-    const extracted = await readFile(outputPath, "utf8");
-    const text = extracted
-      .replace(/\u0000/g, " ")
-      .replace(/[ \t]+/g, " ")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
-
-    if (text.length < 100) {
-      throw new Error("Could not extract enough text from PDF. This may be a scanned/image-only PDF.");
+    const pageFiles = (await readdir(workDir))
+      .filter((name) => /^page-\d+\.png$/.test(name))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .slice(0, 30);
+    if (!pageFiles.length) throw new Error("Could not render scanned PDF pages.");
+    const chunks: string[] = [];
+    for (let index = 0; index < pageFiles.length; index += 3) {
+      const batch = pageFiles.slice(index, index + 3);
+      const images = await Promise.all(batch.map(async (name) => `data:image/png;base64,${(await readFile(join(workDir, name))).toString("base64")}`));
+      const transcription = await askOpenRouterVision(
+        `Transcribe these study-document pages in reading order. Page numbers: ${index + 1}-${index + batch.length}. Preserve all useful exam content, headings, formulas, examples, dates, names, tables and MCQ options. Return plain text only.`,
+        images,
+        { maxTokens: 6000 },
+      );
+      chunks.push(transcription);
     }
-    return text.slice(0, 50000);
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("ENOENT")) {
-      throw new Error("PDF extraction is unavailable on the server.");
-    }
-    throw error;
+    const ocrText = chunks.join("\n\n").replace(/\u0000/g, " ").trim();
+    if (ocrText.length < 100) throw new Error("OCR could not read enough content from this scanned PDF.");
+    return { text: ocrText.slice(0, 50000), sourceMode: text.length ? "mixed" : "ocr" };
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -78,7 +105,8 @@ async function generateQuestionsFromText(
   text: string,
   count: number,
   language: "en" | "hi",
-  topic: string
+  topic: string,
+  sourceMode: "text" | "ocr" | "mixed",
 ): Promise<QuestionData[]> {
   const langInstruction =
     language === "hi"
@@ -98,9 +126,11 @@ RULES:
 2. Each question must have exactly 4 options (A, B, C, D).
 3. Only one option must be correct.
 4. Questions should test understanding, not just recall.
-5. Include a brief explanation for each correct answer.
-6. Vary difficulty: ~30% easy, ~50% medium, ~20% hard.
-7. Do NOT repeat similar questions.
+5. Include a high-quality 2–3 line solution for each correct answer: first explain why the answer is correct from the material, then add a concise exam-useful takeaway.
+6. Add "examRelevance": one short line explaining why this fact/concept matters for SSC, Railway, Banking, State PCS or another Indian government exam. If not relevant, say "Useful for concept revision."
+7. Vary difficulty: ~30% easy, ~50% medium, ~20% hard.
+8. Do NOT repeat similar questions.
+9. This material came through ${sourceMode === "ocr" ? "OCR from scanned pages" : sourceMode === "mixed" ? "text extraction plus OCR" : "text extraction"}; resolve wording carefully and never invent unreadable facts.
 
 OUTPUT FORMAT (JSON array only, no other text):
 [
@@ -108,7 +138,8 @@ OUTPUT FORMAT (JSON array only, no other text):
     "question": "Question text here?",
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "correctOptionIndex": 0,
-    "explanation": "Brief explanation here."
+    "explanation": "2–3 lines explaining the answer and the key concept.",
+    "examRelevance": "Why this is useful for government-exam preparation."
   }
 ]
 
@@ -129,6 +160,7 @@ Generate exactly ${count} questions now:`;
     options: string[];
     correctOptionIndex: number;
     explanation: string;
+    examRelevance?: string;
   }>;
 
   const valid = parsed.filter((q) =>
@@ -146,7 +178,7 @@ Generate exactly ${count} questions now:`;
     question: q.question ?? "Question",
     options: (q.options ?? []).slice(0, 4),
     correctOptionIndex: Math.max(0, Math.min(3, q.correctOptionIndex ?? 0)),
-    explanation: q.explanation ?? "",
+    explanation: [q.explanation ?? "", q.examRelevance ? `Exam relevance: ${q.examRelevance}` : ""].filter(Boolean).join("\n"),
     language,
   }));
 }
@@ -155,11 +187,13 @@ Generate exactly ${count} questions now:`;
 
 const PROCESSING_FRAMES = [
   "🔍 *Analysing your PDF\\.\\.\\.*\n\n📄 Reading document structure\\.\\.\\.",
-  "📖 *Extracting content\\.\\.\\.*\n\n🔤 Identifying key concepts and topics\\.\\.\\.",
+  "📖 *Extracting your text\\.\\.\\.*\n\n🔤 Identifying key concepts and topics\\.\\.\\.",
+  "📚 *Reading through your resources\\.\\.\\.*\n\n🧩 Connecting headings, examples and important facts\\.\\.\\.",
+  "🖼️ *Scanning pages when needed\\.\\.\\.*\n\n🔎 Carefully reading diagrams and image-based text\\.\\.\\.",
   "🧠 *AI is thinking\\.\\.\\.*\n\n📊 Mapping topics to exam patterns\\.\\.\\.",
-  "✍️ *Generating questions\\.\\.\\.*\n\n🎯 Crafting MCQs from your material\\.\\.\\.",
-  "✅ *Verifying answers\\.\\.\\.*\n\n🔎 Cross\\-checking correctness and difficulty\\.\\.\\.",
-  "📦 *Finalising your test set\\.\\.\\.*\n\n💾 Saving to your profile\\.\\.\\.",
+  "✍️ *Preparing your quiz\\.\\.\\.*\n\n🎯 Crafting high\\-quality MCQs from your material\\.\\.\\.",
+  "✅ *Verifying answers\\.\\.\\.*\n\n🔎 Cross\\-checking solutions, difficulty and exam relevance\\.\\.\\.",
+  "📦 *Finalising your test set\\.\\.\\.*\n\n💾 Saving it to your profile\\.\\.\\.",
 ];
 
 async function runAnimationLoop(
@@ -215,8 +249,8 @@ async function processCustomTest(
 
     runAnimationLoop(userId, animMsgId, animDone).catch(() => {});
 
-    const text = await extractTextFromPdf(fileId);
-    questions = await generateQuestionsFromText(text, questionCount, language, fileName);
+    const extracted = await extractTextFromPdf(fileId);
+    questions = await generateQuestionsFromText(extracted.text, questionCount, language, fileName, extracted.sourceMode);
 
     if (questions.length === 0)
       throw new Error("AI could not generate any questions from this document.");
@@ -281,7 +315,7 @@ async function processCustomTest(
 
     await api.sendMessage(
       userId,
-      `❌ *Failed to generate your test\\.*\n\n_Reason: ${escMd(errMsg.slice(0, 200))}_\n\nPlease try again with a different PDF\\. Make sure the PDF has selectable text \\(not scanned images\\)\\.`,
+       `❌ *Failed to generate your test\\.*\n\n_Reason: ${escMd(errMsg.slice(0, 200))}_\n\nPlease try again with a clearer PDF or image scan\\. Scanned PDFs are supported, but very blurry pages may need a better upload\\.`,
       { parse_mode: "MarkdownV2" }
     );
   }

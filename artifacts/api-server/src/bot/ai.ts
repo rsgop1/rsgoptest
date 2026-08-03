@@ -1,7 +1,8 @@
 import { logger } from "../lib/logger.js";
 import { BOT_FUNCTIONS_MANUAL } from "./manual.js";
 
-type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+type ChatContent = string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
+type ChatMessage = { role: "system" | "user" | "assistant"; content: ChatContent };
 
 export const BOT_HELP_CONTEXT = `
 You are the AI assistant inside Series TestPro Telegram bot.
@@ -54,4 +55,19 @@ export async function askOpenRouter(
     throw new Error(data.error?.message ?? `OpenRouter request failed: ${response.status}`);
   }
   return data.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
+export async function askOpenRouterVision(
+  prompt: string,
+  imageDataUrls: string[],
+  options: { temperature?: number; maxTokens?: number } = {},
+): Promise<string> {
+  const content: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+    { type: "text", text: prompt },
+    ...imageDataUrls.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+  ];
+  return askOpenRouter([
+    { role: "system", content: "You are a careful document OCR specialist. Transcribe only visible content, preserve equations, names, dates, tables and answer choices, and mark unreadable words as [unclear]. Do not invent missing text." },
+    { role: "user", content },
+  ], { ...options, temperature: options.temperature ?? 0.1 });
 }

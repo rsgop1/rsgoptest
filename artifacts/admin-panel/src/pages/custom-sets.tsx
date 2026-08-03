@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +30,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Trash2, ExternalLink, FileText, Search, RefreshCw, Bot, Eye, Clock3, UserRound, Link2, Pencil, BarChart2, Globe, GlobeLock } from "lucide-react";
+import { Trash2, ExternalLink, FileText, Search, RefreshCw, Bot, Eye, Clock3, UserRound, Link2, Pencil, BarChart2, Globe, GlobeLock, Filter, ScanLine, AlertTriangle } from "lucide-react";
 import { QuestionAnalyticsPanel } from "@/components/question-analytics-panel";
 
 interface CustomQuestion {
@@ -87,6 +87,7 @@ export default function CustomSetsPage() {
   const [selectedSet, setSelectedSet] = useState<CustomSet | null>(null);
   const [editSet, setEditSet] = useState<CustomSet | null>(null);
   const [analyticsSet, setAnalyticsSet] = useState<CustomSet | null>(null);
+  const [statusFilter, setStatusFilter] = useState("all");
   const [editForm, setEditForm] = useState({ title: "", language: "en", priceInr: 0, priceInStars: 0, timerSeconds: 30, positiveMarking: 1, negativeMarking: 0 });
   const [saving, setSaving] = useState(false);
 
@@ -143,12 +144,14 @@ export default function CustomSetsPage() {
 
   const filtered = sets.filter((s) => {
     const q = search.toLowerCase();
-    return (
+    const matchesSearch = (
       s.title.toLowerCase().includes(q) ||
       (s.fullName ?? "").toLowerCase().includes(q) ||
       (s.username ?? "").toLowerCase().includes(q) ||
       String(s.userId).includes(q)
     );
+    const matchesStatus = statusFilter === "all" || s.status === statusFilter;
+    return matchesSearch && matchesStatus;
   });
 
   const stats = {
@@ -157,6 +160,20 @@ export default function CustomSetsPage() {
     processing: sets.filter((s) => s.status === "processing").length,
     failed: sets.filter((s) => s.status === "failed").length,
   };
+  const staleProcessing = useMemo(() => sets.filter((s) =>
+    s.status === "processing" && Date.now() - new Date(s.createdAt).getTime() > 15 * 60 * 1000
+  ).length, [sets]);
+  const quality = useMemo(() => {
+    const ready = sets.filter((s) => s.status === "ready");
+    const questions = ready.flatMap((s) => s.questionsData ?? []);
+    const complete = questions.filter((q) =>
+      q.question.trim().length > 10 &&
+      Array.isArray(q.options) && q.options.length === 4 &&
+      typeof q.correctOptionIndex === "number" &&
+      (q.explanation ?? "").trim().length >= 40
+    ).length;
+    return { questions: questions.length, complete, percentage: questions.length ? Math.round((complete / questions.length) * 100) : 0 };
+  }, [sets]);
 
   function statusBadge(status: string) {
     if (status === "ready") return <Badge className="bg-green-100 text-green-800 border-green-200">✅ Ready</Badge>;
@@ -212,6 +229,29 @@ export default function CustomSetsPage() {
           </CardContent>
         </Card>
       </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card className="border-blue-200 bg-blue-50/50 dark:bg-blue-950/20">
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-2 text-blue-700 dark:text-blue-300"><ScanLine className="h-4 w-4" /><span className="text-sm font-medium">Document intelligence</span></div>
+            <div className="text-2xl font-bold mt-2">{quality.percentage}%</div>
+            <p className="text-xs text-muted-foreground mt-1">Questions with 4 options and detailed solutions</p>
+          </CardContent>
+        </Card>
+        <Card className={staleProcessing ? "border-amber-300 bg-amber-50/60 dark:bg-amber-950/20" : ""}>
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-600" /><span className="text-sm font-medium">Needs attention</span></div>
+            <div className="text-2xl font-bold mt-2">{staleProcessing}</div>
+            <p className="text-xs text-muted-foreground mt-1">Processing for over 15 minutes</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-2"><Filter className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">Current view</span></div>
+            <div className="text-2xl font-bold mt-2">{filtered.length}</div>
+            <p className="text-xs text-muted-foreground mt-1">{statusFilter === "all" ? "All statuses" : `${statusFilter} sets`} matching</p>
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Table */}
       <Card>
@@ -227,6 +267,17 @@ export default function CustomSetsPage() {
                 className="pl-8 h-8 text-sm"
               />
             </div>
+            <select
+              aria-label="Filter custom sets by status"
+              className="h-8 rounded-md border bg-background px-2 text-sm"
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+            >
+              <option value="all">All statuses</option>
+              <option value="ready">Ready</option>
+              <option value="processing">Processing</option>
+              <option value="failed">Failed</option>
+            </select>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -259,9 +310,12 @@ export default function CustomSetsPage() {
                       <TableRow key={s.id} className={!s.isActive ? "opacity-40" : undefined}>
                         <TableCell className="max-w-[200px]">
                           <div className="font-medium text-sm truncate">{s.title}</div>
-                          {s.sourceFileName && (
+                           {s.sourceFileName && (
                             <div className="text-xs text-muted-foreground truncate">{s.sourceFileName}</div>
                           )}
+                           {s.status === "processing" && Date.now() - new Date(s.createdAt).getTime() > 15 * 60 * 1000 && (
+                             <div className="text-xs text-amber-600 truncate">Taking longer than expected · scanned PDFs may need extra time</div>
+                           )}
                           {s.failReason && (
                             <div className="text-xs text-red-500 truncate" title={s.failReason}>
                               {s.failReason.slice(0, 60)}
