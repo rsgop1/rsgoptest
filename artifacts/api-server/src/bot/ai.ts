@@ -1,4 +1,5 @@
 import { logger } from "../lib/logger.js";
+import { BOT_FUNCTIONS_MANUAL } from "./manual.js";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -9,15 +10,21 @@ Working features:
 - /test_series: browse tests; users see test details, timer, marking, then Start Test
 - /createtest: Premium users upload a selectable-text PDF; AI creates source-grounded MCQs
 - /mysets: view, share and start custom PDF test sets
-- /ai_tutor: conversational exam tutor
-- /doubt: one-command doubt solver
+- AI Space: active Premium users can analyse their completed tests and chat about bot problems, tests, and academic doubts
 - AI Info button: explains a question, correct answer and wrong options from the solution screen
 - /dashboard and /profile: progress, wrong notebook, Premium status and remaining days
 - /support: category selection followed by a written issue creates a support ticket
 - /premium: upgrade or renew Premium
 - /stats and /notebook: performance and wrong-question practice
-When a user reports a bot problem, first explain the correct command or button path. If it still needs human help, tell them to use /support and include the category and details.
+When a user reports a bot problem, first explain the correct command or button path. If it still needs human help, tell them to use /support and include the category and details. Legacy AI commands are not the supported entry point; send users to /menu and AI Space.
 `;
+
+export const BOT_AGENT_CONTEXT = `${BOT_HELP_CONTEXT}
+
+Authoritative operating manual:
+${BOT_FUNCTIONS_MANUAL}
+
+Use the manual as product truth, but use live database context as truth for personal metrics.`;
 
 export async function askOpenRouter(
   messages: ChatMessage[],

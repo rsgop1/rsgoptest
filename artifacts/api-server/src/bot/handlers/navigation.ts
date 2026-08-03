@@ -14,7 +14,7 @@ export function homeKeyboard(): InlineKeyboard {
     .text("📊 Dashboard", "nav_dashboard").text("👤 Profile", "nav_profile").row()
     .text("📓 Notebook", "nav_notebook").text("🏆 Leaderboard", "nav_leaderboard").row()
     .text("🔴 Live Tests", "nav_live").text("💎 Premium", "nav_premium").row()
-    .text("💬 Support", "nav_support").row()
+    .text("🤖 AI Space", "nav_ai").text("💬 Support", "nav_support").row()
     .text("💎 VIP Group", "nav_vip");
 }
 
@@ -98,19 +98,15 @@ export function registerNavigationHandlers(bot: Bot): void {
 
   bot.callbackQuery("nav_ai", async (ctx) => {
     await ctx.answerCallbackQuery();
-    const kb = new InlineKeyboard().text("🧠 AI Tutor", "nav_ai_tutor").text("❓ Doubt Solver", "nav_doubt").row().text("📝 AI Practice", "ai_menu_questions").row().text("🏠 Home", "nav_home");
-    await edit(ctx, "🤖 *AI Study Center*\n\nYour personal exam companion for concepts, doubts, explanations, and practice questions:", kb);
-  });
-
-  bot.callbackQuery("nav_ai_tutor", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    updateSession(ctx.from.id, { pendingAiTutor: true });
-    await edit(ctx, "🧠 *AI Tutor is ready*\n\nSend your question in the next message\\. I’ll explain it step by step for your exam\\.\n\n_Tap Home anytime to return to the Study Hub\\._", new InlineKeyboard().text("🏠 Home", "nav_home"));
-  });
-
-  bot.callbackQuery("nav_doubt", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await edit(ctx, "❓ *Doubt Solver ready*\n\nSend your doubt as your next message, or use `/doubt your question`.", new InlineKeyboard().text("🏠 Home", "nav_home"));
+    const [user] = await db.select({ tier: usersTable.tier, premiumExpiry: usersTable.premiumExpiry })
+      .from(usersTable).where(eq(usersTable.userId, ctx.from.id)).limit(1);
+    const premium = user?.tier === "Premium" && !!user.premiumExpiry && user.premiumExpiry > new Date();
+    if (!premium) {
+      await edit(ctx, "🔒 *AI Space is a Premium feature*\n\nYour personal agent can analyse your tests, explain bot features, and solve study doubts from one workspace.\n\nUpgrade Premium to unlock it.", new InlineKeyboard().text("💎 Upgrade Premium", "premium_upi").row().text("🏠 Home", "nav_home"));
+      return;
+    }
+    const { openAgenticWorkspace } = await import("../agentic.js");
+    await openAgenticWorkspace(ctx);
   });
 
   bot.callbackQuery("nav_create", async (ctx) => {

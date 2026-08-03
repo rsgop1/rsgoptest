@@ -17,6 +17,7 @@ import { registerVipHandlers, startVipAccessScheduler } from "./handlers/vip.js"
 import { registerNavigationHandlers } from "./handlers/navigation.js";
 import { startAgenticAnalysisScheduler } from "./agentic.js";
 import { registerDisabledAiHandlers } from "./handlers/ai-disabled.js";
+import { registerAgenticHandlers } from "./agentic.js";
 import { logger } from "../lib/logger.js";
 import { emitTelemetry } from "../lib/telemetry.js";
 
@@ -44,6 +45,7 @@ registerCustomTestHandlers(bot);
 registerSupportHandlers(bot);
 registerVipHandlers(bot);
 registerNavigationHandlers(bot);
+registerAgenticHandlers(bot);
 
 bot.callbackQuery("ad_noop", async (ctx) => {
   await ctx.answerCallbackQuery({ text: "⏳ Please wait for the timer...", show_alert: false });

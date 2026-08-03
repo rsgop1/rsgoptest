@@ -1,9 +1,9 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { testSeriesTable, userHistoryTable, usersTable } from "@workspace/db";
-import { askOpenRouter, BOT_HELP_CONTEXT } from "./ai.js";
+import { askOpenRouter, BOT_AGENT_CONTEXT } from "./ai.js";
 import { getApi } from "./api-instance.js";
 import { clearAgenticSession, getSession, updateSession } from "./session.js";
 import { logger } from "../lib/logger.js";
@@ -19,17 +19,22 @@ let lastRunStats = { sets: 0, questions: 0 };
 
 export function agenticRoomKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
-    .text("📈 My Insights", "agentic_insights").text("🎯 Study Plan", "agentic_plan").row()
-    .text("🧠 Analyze a Topic", "agentic_topic").text("📝 Make Practice Set", "agentic_practice").row()
-    .text("🧹 Clear Chat", "agentic_clear").text("🏠 Back Home", "agentic_back");
+    .text("📊 Analyze my tests", "agentic_insights");
 }
 
 export function agenticRoomText(): string {
-  return "🧠 Agentic AI Workspace\n\nYour always-on exam strategist is ready.\n\nAsk anything, or use the tools below. I can explain concepts, find weak areas, build a study plan, generate practice, and guide your next attempt.";
+  return "🤖 AI Space\n\nYour personal study agent is ready.\n\nIt can analyse your completed tests, explain weak topics, solve exam doubts, and help with any Series TestPro problem.\n\nTap Analyse to get a detailed performance report, or send a message.";
 }
 
 export async function openAgenticWorkspace(ctx: any): Promise<void> {
   const currentMessageId = ctx.callbackQuery?.message?.message_id;
+  const [user] = await db.select({ tier: usersTable.tier, premiumExpiry: usersTable.premiumExpiry })
+    .from(usersTable).where(eq(usersTable.userId, ctx.from.id)).limit(1);
+  const premium = user?.tier === "Premium" && !!user.premiumExpiry && user.premiumExpiry > new Date();
+  if (!premium) {
+    await ctx.reply("🔒 AI Space is available for active Premium users. Use /premium to unlock your personal study agent.");
+    return;
+  }
   updateSession(ctx.from.id, { agenticActive: true, agenticMessageIds: currentMessageId ? [currentMessageId] : [] });
   try {
     await ctx.editMessageText(agenticRoomText(), { reply_markup: agenticRoomKeyboard() });
@@ -81,22 +86,6 @@ export function registerAgenticHandlers(bot: Bot): void {
   bot.callbackQuery("agentic_insights", async (ctx) => {
     await ctx.answerCallbackQuery({ text: "Building your insights…" });
     await sendAgenticToolResult(ctx, "Personal Insights", "Give me a concise personal dashboard: my weak areas, strong areas, recent trend, and the best next 3 actions.");
-  });
-
-  bot.callbackQuery("agentic_plan", async (ctx) => {
-    await ctx.answerCallbackQuery({ text: "Creating your plan…" });
-    await sendAgenticToolResult(ctx, "Your Study Plan", "Create a practical 7-day personalized study plan based on my weak topics, strong topics, target exam, and recent performance.");
-  });
-
-  bot.callbackQuery("agentic_topic", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    const message = await ctx.reply("🧠 Send the topic you want me to analyze next.", { reply_markup: new InlineKeyboard().text("⬅️ Back to Agentic AI", "agentic_open") });
-    trackMessage(ctx.from.id, message.message_id);
-  });
-
-  bot.callbackQuery("agentic_practice", async (ctx) => {
-    await ctx.answerCallbackQuery({ text: "Designing practice…" });
-    await sendAgenticToolResult(ctx, "Personal Practice Set", "Create a 5-question practice set focused on my weakest areas. Include options, answers, and short explanations.");
   });
 
   bot.on("message:text", async (ctx, next) => {
@@ -154,8 +143,59 @@ async function getUserInsights(userId: number): Promise<string> {
     userAnswers: userHistoryTable.userAnswers,
   }).from(userHistoryTable).where(eq(userHistoryTable.userId, userId)).orderBy(desc(userHistoryTable.completedAt)).limit(20);
 
+  const testRows = await db.select({
+    testId: testSeriesTable.testId,
+    testName: testSeriesTable.testName,
+    questionsData: testSeriesTable.questionsData,
+  }).from(testSeriesTable);
+  const testMap = new Map(testRows.map((t) => [t.testId, t]));
+  const testGroups = new Map<string, typeof attempts>();
+  for (const attempt of attempts) {
+    const group = testGroups.get(attempt.testId) ?? [];
+    group.push(attempt);
+    testGroups.set(attempt.testId, group);
+  }
+  const allAttempts = testGroups.size
+    ? await db.select({
+      testId: userHistoryTable.testId,
+      score: userHistoryTable.score,
+      userAnswers: userHistoryTable.userAnswers,
+      correctCount: userHistoryTable.correctCount,
+      wrongCount: userHistoryTable.wrongCount,
+      accuracy: userHistoryTable.accuracy,
+    }).from(userHistoryTable).where(inArray(userHistoryTable.testId, [...testGroups.keys()]))
+    : [];
+  const allGroups = new Map<string, typeof allAttempts>();
+  for (const attempt of allAttempts) {
+    const group = allGroups.get(attempt.testId) ?? [];
+    group.push(attempt);
+    allGroups.set(attempt.testId, group);
+  }
   const performance = attempts.length
-    ? attempts.map((a) => `${a.testId}: ${a.accuracy}% accuracy, ${a.correctCount} correct, ${a.wrongCount} wrong`).join("; ")
+    ? [...testGroups.entries()].slice(0, 12).map(([testId, rows]) => {
+      const title = testMap.get(testId)?.testName ?? testId;
+      const avg = rows.reduce((sum, row) => sum + row.accuracy, 0) / rows.length;
+      const population = allGroups.get(testId) ?? [];
+      const topper = population.reduce((max, row) => Math.max(max, row.score), -Infinity);
+      const test = testMap.get(testId);
+      const qCount = Array.isArray(test?.questionsData) ? test.questionsData.length : 0;
+      const questionStats = Array.from({ length: qCount }, (_, index) => {
+        const valid = rows.filter((row) => Array.isArray(row.userAnswers) && typeof (row.userAnswers as unknown[])[index] === "number");
+        const correct = valid.filter((row) => (row.userAnswers as unknown[])[index] === (test?.questionsData as any[])?.[index]?.correctOptionIndex).length;
+        return valid.length ? correct / valid.length : null;
+      }).filter((v): v is number => v !== null);
+      const weakQuestionAccuracy = questionStats.length ? Math.min(...questionStats) * 100 : null;
+      const sorted = [...population].sort((a, b) => b.score - a.score);
+      const band = Math.max(1, Math.ceil(sorted.length * 0.27));
+      const accuracyFor = (group: typeof rows) => {
+        const answered = group.reduce((sum, row) => sum + row.correctCount + row.wrongCount, 0);
+        return answered ? group.reduce((sum, row) => sum + row.correctCount, 0) / answered : 0;
+      };
+      const discrimination = sorted.length >= 4 ? (accuracyFor(sorted.slice(0, band)) - accuracyFor(sorted.slice(-band))) * 100 : null;
+      const indexed = setAnalysisCache.get(testId)?.analysis;
+      const topics = indexed?.topics?.length ? indexed.topics.join(", ") : "not indexed yet";
+      return `Title: ${title}; attempts=${rows.length}; average accuracy=${avg.toFixed(1)}%; best personal score=${rows.reduce((max, row) => Math.max(max, row.score), -Infinity)}; topper score=${topper === -Infinity ? "unknown" : topper}; weak topics from question intelligence=${topics}; weakest question accuracy=${weakQuestionAccuracy === null ? "not enough data" : `${weakQuestionAccuracy.toFixed(1)}%`}; discrimination index=${discrimination === null ? "not reliable yet" : discrimination.toFixed(1)}`;
+    }).join("\n")
     : "No completed attempts yet";
   const weak = attempts.length
     ? attempts.filter((a) => a.accuracy < 60).map((a) => a.testId).slice(0, 5).join(", ")
@@ -163,7 +203,7 @@ async function getUserInsights(userId: number): Promise<string> {
   const strong = attempts.length
     ? attempts.filter((a) => a.accuracy >= 80).map((a) => a.testId).slice(0, 5).join(", ")
     : "Not enough data yet";
-  return `Student: ${user?.fullName ?? "Student"} | Plan: ${user?.tier ?? "Free"} | Target: ${user?.targetExamSub ?? "Not set"}\nAttempts: ${performance}\nLikely weak sets: ${weak}\nStrong sets: ${strong}`;
+  return `Student: ${user?.fullName ?? "Student"} | Plan: ${user?.tier ?? "Free"} | Target: ${user?.targetExamSub ?? "Not set"}\nCompleted test analysis (use titles, not IDs):\n${performance}\nLikely weak sets: ${weak}\nStrong sets: ${strong}`;
 }
 
 export async function answerAgenticMessage(userId: number, text: string): Promise<string> {
@@ -171,9 +211,10 @@ export async function answerAgenticMessage(userId: number, text: string): Promis
   const cached = [...setAnalysisCache.entries()].slice(0, 12)
     .map(([id, value]) => `${id}: topics=${value.analysis.topics.join(",")}; focus=${value.analysis.focus}; question intelligence=${value.analysis.questions.length} questions`).join("\n");
   return askOpenRouter([
-    { role: "system", content: `${BOT_HELP_CONTEXT}
+      { role: "system", content: `${BOT_AGENT_CONTEXT}
 You are the always-on Agentic AI strategist inside Series TestPro. You can act as a tutor, performance analyst, study planner, practice-set designer, revision coach, and exam accountability partner.
 Use the student's real context below. Be personal and actionable. If asked to do work, do it directly in the response. Never claim an action happened if it did not. Keep responses under 350 words, plain text, readable in Telegram.
+Never show internal test IDs to the user. Use test titles. Report average accuracy, weak topics, strong topics, topper score, and discrimination index only when available in the context; otherwise say that data is insufficient.
 Student context:
 ${insights}
 Background question intelligence:
