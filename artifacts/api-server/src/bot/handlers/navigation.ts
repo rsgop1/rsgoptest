@@ -12,9 +12,9 @@ export function homeKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("📚 Test Series", "nav_tests").text("🧪 Create Test", "nav_create").row()
     .text("📊 Dashboard", "nav_dashboard").text("👤 Profile", "nav_profile").row()
-    .text("🧠 Agentic AI", "agentic_open").text("📓 Notebook", "nav_notebook").row()
-    .text("🏆 Leaderboard", "nav_leaderboard").text("🔴 Live Tests", "nav_live").row()
-    .text("💎 Premium", "nav_premium").text("💬 Support", "nav_support").row()
+    .text("📓 Notebook", "nav_notebook").text("🏆 Leaderboard", "nav_leaderboard").row()
+    .text("🔴 Live Tests", "nav_live").text("💎 Premium", "nav_premium").row()
+    .text("💬 Support", "nav_support").row()
     .text("💎 VIP Group", "nav_vip");
 }
 

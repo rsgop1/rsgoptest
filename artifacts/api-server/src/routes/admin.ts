@@ -24,6 +24,7 @@ import { logger } from "../lib/logger.js";
 import { telemetryEmitter, getRecentEvents, emitTelemetry } from "../lib/telemetry.js";
 import { createHmac, randomBytes } from "crypto";
 import { getVipConfig, grantVipAccess, removeVipAccess, rotateVipAccessCode, syncVipAccess } from "../bot/handlers/vip.js";
+import { getAgenticAnalysisStatus, runAgenticAnalysis } from "../bot/agentic.js";
 
 const ADMIN_PASSWORD = "rsg@123";
 const COOKIE_NAME = "tbadmin";
@@ -558,6 +559,20 @@ router.get("/tests/:testId/question-analytics", requireAuth, async (req: Request
   } catch (err) {
     logger.error({ err }, "Question analytics error");
     res.status(500).json({ error: "Failed to load question analytics" });
+  }
+});
+
+router.get("/agentic-analysis/status", requireAuth, async (_req: Request, res: Response) => {
+  res.json(getAgenticAnalysisStatus());
+});
+
+router.post("/agentic-analysis/run", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    await runAgenticAnalysis();
+    res.json(getAgenticAnalysisStatus());
+  } catch (err) {
+    logger.error({ err }, "Agentic analysis manual run failed");
+    res.status(500).json({ error: "Agentic analysis run failed" });
   }
 });
 

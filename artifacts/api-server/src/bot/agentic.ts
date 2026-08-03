@@ -12,6 +12,10 @@ type QuestionAnalysis = { question: string; topics: string[]; skills: string[]; 
 type SetAnalysis = { topics: string[]; skills: string[]; difficulty: string; focus: string; questions: QuestionAnalysis[] };
 const setAnalysisCache = new Map<string, { analysis: SetAnalysis; updatedAt: number }>();
 let analysisRunning = false;
+let lastRunAt: number | null = null;
+let lastCompletedAt: number | null = null;
+let lastError: string | null = null;
+let lastRunStats = { sets: 0, questions: 0 };
 
 export function agenticRoomKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
@@ -216,17 +220,53 @@ Do not solve questions and do not omit any question.` },
 export async function runAgenticAnalysis(): Promise<void> {
   if (analysisRunning) return;
   analysisRunning = true;
+  lastRunAt = Date.now();
+  lastError = null;
   try {
     const tests = await db.select({ testId: testSeriesTable.testId, testName: testSeriesTable.testName, questionsData: testSeriesTable.questionsData })
       .from(testSeriesTable).where(eq(testSeriesTable.isActive, true));
+    let analyzedSets = 0;
+    let analyzedQuestions = 0;
     for (const test of tests) {
       const cached = setAnalysisCache.get(test.testId);
       if (cached && Date.now() - cached.updatedAt < 6 * 60 * 60 * 1000) continue;
-      try { await analyzeTestSet(test); } catch (error) { logger.warn({ error, testId: test.testId }, "Agentic set analysis failed"); }
+      try {
+        await analyzeTestSet(test);
+        analyzedSets++;
+        analyzedQuestions += Array.isArray(test.questionsData) ? test.questionsData.length : 0;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        logger.warn({ error, testId: test.testId }, "Agentic set analysis failed");
+      }
     }
+    lastRunStats = { sets: analyzedSets, questions: analyzedQuestions };
+    lastCompletedAt = Date.now();
   } finally {
     analysisRunning = false;
   }
+}
+
+export function getAgenticAnalysisStatus() {
+  const sets = [...setAnalysisCache.entries()].map(([testId, item]) => ({
+    testId,
+    updatedAt: new Date(item.updatedAt).toISOString(),
+    topics: item.analysis.topics,
+    skills: item.analysis.skills,
+    difficulty: item.analysis.difficulty,
+    focus: item.analysis.focus,
+    questionCount: item.analysis.questions.length,
+    questions: item.analysis.questions,
+  }));
+  return {
+    running: analysisRunning,
+    lastRunAt: lastRunAt ? new Date(lastRunAt).toISOString() : null,
+    lastCompletedAt: lastCompletedAt ? new Date(lastCompletedAt).toISOString() : null,
+    lastError,
+    lastRunStats,
+    analyzedSets: sets.length,
+    analyzedQuestions: sets.reduce((sum, set) => sum + set.questionCount, 0),
+    sets,
+  };
 }
 
 export function startAgenticAnalysisScheduler(): void {

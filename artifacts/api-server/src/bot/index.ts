@@ -15,7 +15,8 @@ import { registerCustomTestHandlers } from "./handlers/custom-test.js";
 import { registerSupportHandlers } from "./handlers/support.js";
 import { registerVipHandlers, startVipAccessScheduler } from "./handlers/vip.js";
 import { registerNavigationHandlers } from "./handlers/navigation.js";
-import { registerAgenticHandlers, startAgenticAnalysisScheduler } from "./agentic.js";
+import { startAgenticAnalysisScheduler } from "./agentic.js";
+import { registerDisabledAiHandlers } from "./handlers/ai-disabled.js";
 import { logger } from "../lib/logger.js";
 import { emitTelemetry } from "../lib/telemetry.js";
 
@@ -27,6 +28,7 @@ export const bot = new Bot(process.env["TELEGRAM_BOT_TOKEN"]);
 
 setApi(bot.api);
 
+registerDisabledAiHandlers(bot);
 registerStartHandlers(bot);
 registerQuizHandlers(bot);
 registerCommandHandlers(bot);
@@ -42,7 +44,6 @@ registerCustomTestHandlers(bot);
 registerSupportHandlers(bot);
 registerVipHandlers(bot);
 registerNavigationHandlers(bot);
-registerAgenticHandlers(bot);
 
 bot.callbackQuery("ad_noop", async (ctx) => {
   await ctx.answerCallbackQuery({ text: "⏳ Please wait for the timer...", show_alert: false });
@@ -60,10 +61,8 @@ export function startBot(): void {
       bot.api.setMyCommands([
         { command: "start", description: "Home and welcome" },
         { command: "test_series", description: "Browse mock tests" },
-        { command: "ai_tutor", description: "Ask the interactive AI Tutor" },
         { command: "dashboard", description: "View your progress dashboard" },
         { command: "profile", description: "View profile and Premium days" },
-        { command: "ai", description: "Open AI study tools" },
         { command: "createtest", description: "Create a test from your PDF" },
         { command: "mysets", description: "View your custom test sets" },
         { command: "stats", description: "View performance stats" },
