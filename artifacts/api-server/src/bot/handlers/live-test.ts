@@ -4,10 +4,31 @@ import { db } from "@workspace/db";
 import { liveTestsTable, testSeriesTable, usersTable, userHistoryTable } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
 import { getApi } from "../api-instance.js";
-import { startQuizForUser } from "./quiz.js";
 import { getConfig } from "./helpers.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
+import type { QuestionData } from "@workspace/db";
+
+type LiveScore = { correct: number; answered: number; name: string };
+type LiveSession = {
+  liveTestId: number;
+  groupId: number;
+  questions: QuestionData[];
+  title: string;
+  currentIndex: number;
+  pollId: string | null;
+  timer: ReturnType<typeof setTimeout> | null;
+  scores: Map<number, LiveScore>;
+};
+const liveSessions = new Map<number, LiveSession>();
+
+export function stopLiveTestSession(liveTestId: number): boolean {
+  const session = liveSessions.get(liveTestId);
+  if (!session) return false;
+  if (session.timer) clearTimeout(session.timer);
+  liveSessions.delete(liveTestId);
+  return true;
+}
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -49,7 +70,7 @@ export async function announceLiveTest(liveTestId: number): Promise<void> {
     (test ? `📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n` : "") +
     `📊 *${qCount}* Questions\n` +
     `⏰ Starts: *${escMd(schedTime)} IST*\n\n` +
-    `👇 Tap below to join\\! Your questions will be sent to your DM automatically when the test begins\\.`;
+    `👇 Tap below to join\\! At start, one shared timed poll will appear here for everyone\\.`;
 
   let pinnedMsgId: number | null = null;
   let finalGroupId: number | null = liveTest.groupChatId;
@@ -141,39 +162,53 @@ export async function startLiveTest(liveTestId: number): Promise<void> {
     return;
   }
 
-  await db.update(liveTestsTable).set({ status: "live" }).where(eq(liveTestsTable.id, liveTestId));
-
-  if (liveTest.groupChatId) {
-    try {
-      await api.sendMessage(
-        liveTest.groupChatId,
-        `🚀 *LIVE TEST STARTED\\!*\n\n📝 *${escMd(liveTest.title)}*\n👥 *${participants.length}* participants\n\n📱 _Check your DM with @gt\\_testprobot — questions are being sent\\!_\n\n🏆 _Leaderboard will be posted here when the test ends\\._`,
-        { parse_mode: "MarkdownV2" }
-      );
-    } catch { }
+  const groupId = liveTest.groupChatId;
+  if (!groupId) {
+    await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, liveTestId));
+    logger.warn({ liveTestId }, "Group poll live test has no group chat");
+    return;
   }
+  const questions = (test.questionsData ?? []) as QuestionData[];
+  if (!questions.length) return;
+  const session: LiveSession = {
+    liveTestId, groupId, questions, title: liveTest.title, currentIndex: 0,
+    pollId: null, timer: null, scores: new Map(),
+  };
+  liveSessions.set(liveTestId, session);
+  await db.update(liveTestsTable).set({ status: "live", currentQuestionIndex: 0 }).where(eq(liveTestsTable.id, liveTestId));
 
-  for (const userId of participants) {
-    try {
-      await startQuizForUser(userId, test, true);
-      await new Promise(r => setTimeout(r, 300));
-    } catch (err) {
-      logger.warn({ err, userId }, "Could not start live test quiz for participant");
-    }
-  }
-
-  emitTelemetry(`Live test started: ${liveTest.title} — ${participants.length} participants`);
-
-  const questions = test.questionsData as unknown[];
-  const timerSeconds = test.timerSeconds ?? 30;
-  const totalTime = (questions.length * timerSeconds + questions.length * 3 + 90) * 1000;
-
-  setTimeout(async () => {
-    await postLiveLeaderboard(liveTestId);
-  }, totalTime);
+  await api.sendMessage(groupId, `🚀 *LIVE GROUP TEST STARTED\\!*\n\n📝 *${escMd(liveTest.title)}*\n👥 *${participants.length}* registered\n\nOne shared poll per question • ${liveTest.timerSeconds}s each\n🏆 Live leaderboard will be posted at the end\\.`, { parse_mode: "MarkdownV2" }).catch(() => {});
+  emitTelemetry(`Live group poll started: ${liveTest.title} — ${participants.length} registered`);
+  await sendNextGroupPoll(session, liveTest.timerSeconds);
 }
 
-async function postLiveLeaderboard(liveTestId: number): Promise<void> {
+async function sendNextGroupPoll(session: LiveSession, timerSeconds: number): Promise<void> {
+  const api = getApi();
+  const q = session.questions[session.currentIndex];
+  if (!q) { await postLiveLeaderboard(session.liveTestId, session.scores); liveSessions.delete(session.liveTestId); return; }
+  try {
+    const poll = await api.sendPoll(session.groupId, `Q${session.currentIndex + 1}/${session.questions.length}: ${q.question}`, q.options, {
+      type: "quiz", correct_option_ids: [q.correctOptionIndex],
+      explanation: q.explanation?.slice(0, 200), open_period: timerSeconds, is_anonymous: false,
+    });
+    session.pollId = poll.poll.id;
+    await db.update(liveTestsTable).set({
+      currentQuestionIndex: session.currentIndex, currentPollId: poll.poll.id, currentPollMessageId: poll.message_id,
+    }).where(eq(liveTestsTable.id, session.liveTestId));
+    if (session.timer) clearTimeout(session.timer);
+    session.timer = setTimeout(async () => {
+      session.pollId = null;
+      session.currentIndex++;
+      await sendNextGroupPoll(session, timerSeconds);
+    }, (timerSeconds + 2) * 1000);
+  } catch (err) {
+    logger.warn({ err, groupId: session.groupId }, "Could not send live group poll");
+    await postLiveLeaderboard(session.liveTestId, session.scores);
+    liveSessions.delete(session.liveTestId);
+  }
+}
+
+async function postLiveLeaderboard(liveTestId: number, sessionScores?: Map<number, LiveScore>): Promise<void> {
   const api = getApi();
   const [liveTest] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, liveTestId)).limit(1);
   if (!liveTest) return;
@@ -198,7 +233,17 @@ async function postLiveLeaderboard(liveTestId: number): Promise<void> {
   const nameMap = new Map(userRows.map(u => [u.userId, u.fullName]));
 
   const entries: Array<{ fullName: string; score: number; correct: number; total: number }> = [];
-  for (const userId of participants) {
+  if (sessionScores) {
+    for (const score of sessionScores.values()) {
+      entries.push({
+        fullName: score.name,
+        score: score.correct,
+        correct: score.correct,
+        total: score.answered,
+      });
+    }
+  }
+  for (const userId of sessionScores ? [] : participants) {
     const [latest] = await db.select({ score: userHistoryTable.score, correctCount: userHistoryTable.correctCount })
       .from(userHistoryTable)
       .where(and(eq(userHistoryTable.userId, userId), eq(userHistoryTable.testId, liveTest.testId)))
@@ -213,7 +258,7 @@ async function postLiveLeaderboard(liveTestId: number): Promise<void> {
     });
   }
 
-  entries.sort((a, b) => b.score - a.score);
+  entries.sort((a, b) => b.score - a.score || b.correct - a.correct);
   const leaderboard = buildLeaderboard(entries);
 
   try {
@@ -226,11 +271,29 @@ async function postLiveLeaderboard(liveTestId: number): Promise<void> {
     logger.warn({ err }, "Could not post leaderboard to group");
   }
 
-  await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, liveTestId));
+  await db.update(liveTestsTable).set({ status: "completed", currentPollId: null }).where(eq(liveTestsTable.id, liveTestId));
   emitTelemetry(`Live test completed with leaderboard: ${liveTest.title}`);
 }
 
 export function registerLiveTestHandlers(bot: Bot): void {
+  bot.on("poll_answer", async (ctx) => {
+    const answer = ctx.pollAnswer;
+    if (!answer.user || !answer.option_ids.length) return;
+    for (const session of liveSessions.values()) {
+      if (session.pollId !== answer.poll_id) continue;
+      const q = session.questions[session.currentIndex];
+      if (!q) return;
+      const old = session.scores.get(answer.user.id) ?? {
+        correct: 0, answered: 0,
+        name: [answer.user.first_name, answer.user.last_name].filter(Boolean).join(" ") || `User ${answer.user.id}`,
+      };
+      session.scores.set(answer.user.id, {
+        ...old, answered: old.answered + 1,
+        correct: old.correct + (answer.option_ids[0] === q.correctOptionIndex ? 1 : 0),
+      });
+      return;
+    }
+  });
   bot.callbackQuery(/^live_join_/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const liveTestId = parseInt(ctx.callbackQuery.data.replace("live_join_", ""), 10);

@@ -959,6 +959,7 @@ router.get("/live-tests", requireAuth, async (_req: Request, res: Response) => {
       scheduledAt: r.scheduledAt.toISOString(),
       createdAt: r.createdAt.toISOString(),
       participantCount: Array.isArray(r.participants) ? r.participants.length : 0,
+      mode: r.groupChatId ? "group_poll" : "group_required",
     })));
   } catch (err) {
     res.status(500).json({ error: "Failed to load live tests" });
@@ -967,11 +968,16 @@ router.get("/live-tests", requireAuth, async (_req: Request, res: Response) => {
 
 router.post("/live-tests", requireAuth, async (req: Request, res: Response) => {
   try {
-    const { testId, title, scheduledAt, groupChatId } = req.body as {
-      testId: string; title: string; scheduledAt: string; groupChatId?: string;
+    const { testId, title, scheduledAt, groupChatId, timerSeconds } = req.body as {
+      testId: string; title: string; scheduledAt: string; groupChatId?: string; timerSeconds?: number;
     };
     if (!testId || !title || !scheduledAt) {
       res.status(400).json({ error: "testId, title, scheduledAt required" });
+      return;
+    }
+    const timer = Number(timerSeconds ?? 30);
+    if (![15, 30].includes(timer)) {
+      res.status(400).json({ error: "timerSeconds must be 15 or 30" });
       return;
     }
     const [inserted] = await db.insert(liveTestsTable).values({
@@ -980,6 +986,7 @@ router.post("/live-tests", requireAuth, async (req: Request, res: Response) => {
       scheduledAt: new Date(scheduledAt),
       groupChatId: groupChatId ? Number(groupChatId) : null,
       status: "scheduled",
+      timerSeconds: timer,
     }).returning();
 
     emitTelemetry(`Live test scheduled: "${title}" at ${scheduledAt}`);
@@ -1080,7 +1087,9 @@ router.post("/live-tests/:id/stop", requireAuth, async (req: Request, res: Respo
     const id = Number(req.params["id"]);
     const [lt] = await db.select().from(liveTestsTable).where(eq(liveTestsTable.id, id)).limit(1);
     if (!lt) { res.status(404).json({ error: "Not found" }); return; }
-    await db.update(liveTestsTable).set({ status: "completed" }).where(eq(liveTestsTable.id, id));
+    const { stopLiveTestSession } = await import("../bot/handlers/live-test.js");
+    const stoppedSession = stopLiveTestSession(id);
+    await db.update(liveTestsTable).set({ status: "completed", currentPollId: null }).where(eq(liveTestsTable.id, id));
     const participantIds: number[] = Array.isArray(lt.participants) ? lt.participants as number[] : [];
     const api = getApi();
     let notified = 0;
@@ -1094,7 +1103,7 @@ router.post("/live-tests/:id/stop", requireAuth, async (req: Request, res: Respo
         await new Promise(r => setTimeout(r, 50));
       } catch { }
     }
-    res.json({ ok: true, notified });
+    res.json({ ok: true, notified, pollStopped: stoppedSession });
   } catch (err) {
     logger.error({ err }, "Stop live test error");
     res.status(500).json({ error: "Failed to stop" });

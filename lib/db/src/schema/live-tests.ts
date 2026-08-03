@@ -10,6 +10,9 @@ export const liveTestsTable = pgTable("live_tests", {
   participants: jsonb("participants").$type<number[]>().default([]),
   pinnedMessageId: integer("pinned_message_id"),
   currentQuestionIndex: integer("current_question_index").notNull().default(0),
+  timerSeconds: integer("timer_seconds").notNull().default(30),
+  currentPollId: text("current_poll_id"),
+  currentPollMessageId: integer("current_poll_message_id"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

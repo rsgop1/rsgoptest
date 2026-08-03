@@ -37,6 +37,9 @@ interface LiveTest {
   status: string;
   participantCount: number;
   currentQuestionIndex: number;
+  timerSeconds: number;
+  mode?: string;
+  currentPollId?: string | null;
   createdAt: string;
 }
 
@@ -123,6 +126,7 @@ export default function LiveTests() {
     scheduledAt: "",
     groupChatId: "",
     maxParticipants: "",
+    timerSeconds: "30",
   });
   const [msgTarget, setMsgTarget] = useState<LiveTest | null>(null);
   const [msgText, setMsgText] = useState("");
@@ -158,13 +162,14 @@ export default function LiveTests() {
             ? new Date(data.scheduledAt + ":00+05:30").toISOString()
             : data.scheduledAt,
           groupChatId: data.groupChatId || undefined,
+          timerSeconds: Number(data.timerSeconds),
         }),
       }),
     onSuccess: () => {
       toast.success("Live test scheduled!");
       qc.invalidateQueries({ queryKey: ["admin-live-tests"] });
       setShowCreate(false);
-      setForm({ testId: "", title: "", scheduledAt: "", groupChatId: "", maxParticipants: "" });
+      setForm({ testId: "", title: "", scheduledAt: "", groupChatId: "", maxParticipants: "", timerSeconds: "30" });
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -305,11 +310,16 @@ export default function LiveTests() {
                       {lt.status === "live" && (
                         <span className="flex items-center gap-1 text-red-500 font-medium">
                           <Clock className="h-3.5 w-3.5" />
-                          Q{lt.currentQuestionIndex + 1} active
+                          Q{lt.currentQuestionIndex + 1} active · {lt.timerSeconds}s poll
                         </span>
                       )}
                       {lt.groupChatId && (
                         <span className="text-xs text-muted-foreground">Group: {lt.groupChatId}</span>
+                      )}
+                      {lt.status === "live" && (
+                        <span className="text-xs text-emerald-600 dark:text-emerald-400">
+                          {lt.currentPollId ? "Shared poll open" : "Moving to next poll…"}
+                        </span>
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1.5">Test ID: <code className="bg-muted px-1 rounded">{lt.testId}</code></p>
@@ -371,9 +381,9 @@ export default function LiveTests() {
                           size="sm"
                           variant="outline"
                           className="h-7 text-xs gap-1 border-green-300 text-green-700 hover:bg-green-50 dark:border-green-700 dark:text-green-400 dark:hover:bg-green-950/30"
-                          title="Start test now (send questions to all participants)"
+                           title="Start test now (launch shared group polls)"
                           onClick={() => {
-                            if (confirm(`Start "${lt.title}" now? Questions will be sent to all ${lt.participantCount} participants.`))
+                             if (confirm(`Start "${lt.title}" now? One shared poll will appear in the group for all participants.`))
                               startMut.mutate(lt.id);
                           }}
                           disabled={startMut.isPending}
@@ -632,7 +642,7 @@ export default function LiveTests() {
               </p>
             </div>
             <div>
-              <Label>Group Chat ID (optional)</Label>
+              <Label>Group Chat ID <span className="text-destructive">*</span></Label>
               <Input
                 className="mt-1 font-mono text-sm"
                 placeholder="-1001234567890"
@@ -640,15 +650,26 @@ export default function LiveTests() {
                 onChange={(e) => setForm((f) => ({ ...f, groupChatId: e.target.value }))}
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Announcement, start notification, and final leaderboard will be posted here.
+                 Required: all questions will run as shared polls in this group. Users answer directly in the group.
               </p>
             </div>
+             <div>
+               <Label>Question timer</Label>
+               <Select value={form.timerSeconds} onValueChange={(v) => setForm((f) => ({ ...f, timerSeconds: v }))}>
+                 <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                 <SelectContent>
+                   <SelectItem value="15">15 seconds — Fast</SelectItem>
+                   <SelectItem value="30">30 seconds — Standard</SelectItem>
+                 </SelectContent>
+               </Select>
+               <p className="text-xs text-muted-foreground mt-1">Each poll closes automatically, then the next question starts for everyone.</p>
+             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
             <Button
               onClick={() => createMut.mutate(form)}
-              disabled={!form.testId || !form.title || !form.scheduledAt || createMut.isPending}
+               disabled={!form.testId || !form.title || !form.scheduledAt || !form.groupChatId || createMut.isPending}
             >
               {createMut.isPending ? "Scheduling…" : "Schedule Live Test"}
             </Button>
