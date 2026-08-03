@@ -100,6 +100,8 @@ export interface UserSession {
     step: "awaiting_description";
   };
   pendingAiTutor?: boolean;
+  agenticActive?: boolean;
+  agenticMessageIds?: number[];
 }
 
 const sessions = new Map<number, UserSession>();
@@ -125,4 +127,8 @@ export function clearQuiz(userId: number): void {
 
 export function clearSolution(userId: number): void {
   updateSession(userId, { solution: undefined });
+}
+
+export function clearAgenticSession(userId: number): void {
+  updateSession(userId, { agenticActive: false, agenticMessageIds: undefined, pendingAiTutor: false });
 }

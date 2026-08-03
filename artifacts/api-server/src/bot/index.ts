@@ -15,6 +15,7 @@ import { registerCustomTestHandlers } from "./handlers/custom-test.js";
 import { registerSupportHandlers } from "./handlers/support.js";
 import { registerVipHandlers, startVipAccessScheduler } from "./handlers/vip.js";
 import { registerNavigationHandlers } from "./handlers/navigation.js";
+import { registerAgenticHandlers, startAgenticAnalysisScheduler } from "./agentic.js";
 import { logger } from "../lib/logger.js";
 import { emitTelemetry } from "../lib/telemetry.js";
 
@@ -41,6 +42,7 @@ registerCustomTestHandlers(bot);
 registerSupportHandlers(bot);
 registerVipHandlers(bot);
 registerNavigationHandlers(bot);
+registerAgenticHandlers(bot);
 
 bot.callbackQuery("ad_noop", async (ctx) => {
   await ctx.answerCallbackQuery({ text: "⏳ Please wait for the timer...", show_alert: false });
@@ -77,6 +79,7 @@ export function startBot(): void {
 
       startLiveTestScheduler();
       startVipAccessScheduler();
+      startAgenticAnalysisScheduler();
     },
     allowed_updates: ["message", "callback_query", "poll_answer", "chat_member", "pre_checkout_query"],
   }).catch((err) => {
