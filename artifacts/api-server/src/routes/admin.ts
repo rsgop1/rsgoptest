@@ -1354,10 +1354,21 @@ router.get("/ai-settings", requireAuth, async (_req: Request, res: Response) => 
     const aiEnabled = await getConfig("ai_enabled");
     const doubtPrompt = await getConfig("doubt_prompt");
     const aiInfoPrompt = await getConfig("ai_info_prompt");
+    const scannedPdfOcrEnabled = await getConfig("scanned_pdf_ocr_enabled");
+    const provider = await getConfig("ai_provider");
+    const model = await getConfig("ai_model");
     res.json({
       aiEnabled: aiEnabled !== "false",
       doubtPrompt: doubtPrompt ?? "",
       aiInfoPrompt: aiInfoPrompt ?? "",
+      scannedPdfOcrEnabled: scannedPdfOcrEnabled === "true",
+        provider: provider === "openai" || provider === "gemini" ? provider : "openrouter",
+      model: model ?? "",
+      secrets: {
+        openrouter: Boolean(process.env["OPENROUTER_API_KEY"] ?? process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"]),
+        openai: Boolean(process.env["OPENAI_API_KEY"]),
+        gemini: Boolean(process.env["GEMINI_API_KEY"] ?? process.env["GOOGLE_API_KEY"]),
+      },
     });
   } catch (err) {
     logger.error({ err }, "AI settings GET error");
@@ -1367,12 +1378,16 @@ router.get("/ai-settings", requireAuth, async (_req: Request, res: Response) => 
 
 router.post("/ai-settings", requireAuth, async (req: Request, res: Response) => {
   try {
-    const { aiEnabled, doubtPrompt, aiInfoPrompt } = req.body as {
+    const { aiEnabled, doubtPrompt, aiInfoPrompt, scannedPdfOcrEnabled, provider, model } = req.body as {
       aiEnabled: boolean; doubtPrompt: string; aiInfoPrompt: string;
+      scannedPdfOcrEnabled?: boolean; provider?: string; model?: string;
     };
     await setConfig("ai_enabled", String(aiEnabled));
     if (doubtPrompt !== undefined) await setConfig("doubt_prompt", doubtPrompt);
     if (aiInfoPrompt !== undefined) await setConfig("ai_info_prompt", aiInfoPrompt);
+    if (scannedPdfOcrEnabled !== undefined) await setConfig("scanned_pdf_ocr_enabled", String(scannedPdfOcrEnabled));
+    if (provider === "openrouter" || provider === "openai" || provider === "gemini") await setConfig("ai_provider", provider);
+    if (model !== undefined) await setConfig("ai_model", String(model).trim());
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err }, "AI settings POST error");

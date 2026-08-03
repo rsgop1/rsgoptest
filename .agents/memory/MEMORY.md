@@ -18,3 +18,4 @@
 - [Agentic admin-only mode](agentic-admin-only.md) — Agentic analysis is admin-panel-only; bot AI entry points are hidden/disabled while the background worker remains active.
 - [AI Space session behavior](ai-space-session.md) — Premium AI Space uses HTML formatting, question-level mistake context, title-only analytics, and expires after five idle minutes.
 - [PDF custom-set OCR pipeline](pdf-custom-set-ocr.md) — selectable PDFs use text extraction; image PDFs render pages and use vision OCR before grounded quiz generation.
+- [AI provider secrets](ai-provider-secrets.md) — provider selection is DB config, but API keys stay in Replit Secrets and are never stored through the admin app.

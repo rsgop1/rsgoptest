@@ -15,6 +15,7 @@ import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 import type { QuestionData } from "@workspace/db";
 import { askOpenRouter, askOpenRouterVision, BOT_HELP_CONTEXT } from "../ai.js";
+import { getConfig } from "./helpers.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -68,6 +69,10 @@ async function extractTextFromPdf(fileId: string): Promise<{ text: string; sourc
 
     if (text.length >= 100) {
       return { text: text.slice(0, 50000), sourceMode: "text" };
+    }
+    const scannedOcrEnabled = (await getConfig("scanned_pdf_ocr_enabled")) === "true";
+    if (!scannedOcrEnabled) {
+      throw new Error("This PDF appears to be scanned/image-based. Ask an admin to enable scanned-image AI scanning in AI Settings.");
     }
     // Scanned/image-only PDFs have little or no text layer. Render their pages
     // and send page images to the vision model for careful transcription.

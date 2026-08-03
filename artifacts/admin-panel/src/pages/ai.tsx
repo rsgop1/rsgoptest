@@ -33,6 +33,10 @@ interface AiSettings {
   aiEnabled: boolean;
   doubtPrompt: string;
   aiInfoPrompt: string;
+  scannedPdfOcrEnabled: boolean;
+  provider: "openrouter" | "openai" | "gemini";
+  model: string;
+  secrets: { openrouter: boolean; openai: boolean; gemini: boolean };
 }
 
 interface CouponCode {
@@ -70,6 +74,10 @@ export default function AiPage() {
     aiEnabled: true,
     doubtPrompt: DEFAULT_DOUBT_PROMPT,
     aiInfoPrompt: DEFAULT_AI_INFO_PROMPT,
+    scannedPdfOcrEnabled: false,
+    provider: "openrouter",
+    model: "",
+    secrets: { openrouter: false, openai: false, gemini: false },
   });
 
   const { data: settings, isLoading: settingsLoading } = useQuery<AiSettings>({
@@ -83,6 +91,10 @@ export default function AiPage() {
         aiEnabled: settings.aiEnabled ?? true,
         doubtPrompt: settings.doubtPrompt || DEFAULT_DOUBT_PROMPT,
         aiInfoPrompt: settings.aiInfoPrompt || DEFAULT_AI_INFO_PROMPT,
+        scannedPdfOcrEnabled: settings.scannedPdfOcrEnabled ?? false,
+        provider: settings.provider ?? "openrouter",
+        model: settings.model ?? "",
+        secrets: settings.secrets,
       });
     }
   }, [settings]);
@@ -186,6 +198,56 @@ export default function AiPage() {
               <p className="text-sm text-red-600 dark:text-red-400 font-medium">⚠️ AI features are currently OFF for all users</p>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="h-5 w-5 text-purple-500" />
+            AI Provider & Scanned PDF
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Active AI provider</Label>
+              <select
+                className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                value={form.provider}
+                onChange={(e) => setForm(f => ({ ...f, provider: e.target.value as "openrouter" | "openai" | "gemini" }))}
+              >
+                <option value="openrouter">OpenRouter</option>
+                <option value="openai">OpenAI</option>
+                <option value="gemini">Gemini</option>
+              </select>
+              <p className="text-xs text-muted-foreground">The selected provider powers bot doubts, AI Info, Agentic analysis, custom quizzes, and scanned-PDF OCR.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Model (optional)</Label>
+              <Input value={form.model} onChange={(e) => setForm(f => ({ ...f, model: e.target.value }))} placeholder={form.provider === "openai" ? "gpt-4o-mini" : "openai/gpt-4o-mini"} />
+              <p className="text-xs text-muted-foreground">Leave blank to use the safe default for the selected provider.</p>
+            </div>
+          </div>
+          <div className="rounded-lg border p-4 space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label className="text-base">Scan scanned/image PDFs with AI</Label>
+                <p className="text-xs text-muted-foreground mt-1">OFF = text-layer PDFs only. ON = render scanned pages and send them to the configured vision-capable model.</p>
+              </div>
+              <Switch checked={form.scannedPdfOcrEnabled} onCheckedChange={(v) => setForm(f => ({ ...f, scannedPdfOcrEnabled: v }))} />
+            </div>
+            {form.scannedPdfOcrEnabled && <p className="text-xs text-amber-700 dark:text-amber-400">Vision scanning can use more credits and may take longer for multi-page PDFs.</p>}
+          </div>
+          <div className="rounded-lg bg-muted/50 p-4">
+            <Label>Secure API key status</Label>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+              <Badge variant={form.secrets.openrouter ? "default" : "secondary"}>OpenRouter: {form.secrets.openrouter ? "configured" : "missing"}</Badge>
+              <Badge variant={form.secrets.openai ? "default" : "secondary"}>OpenAI: {form.secrets.openai ? "configured" : "missing"}</Badge>
+              <Badge variant={form.secrets.gemini ? "default" : "secondary"}>Gemini: {form.secrets.gemini ? "configured" : "missing"}</Badge>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">Keys stay in Replit Secrets and are never stored in the app database or displayed here. Add/update them through the secure Secrets panel.</p>
+          </div>
         </CardContent>
       </Card>
 
