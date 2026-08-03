@@ -417,11 +417,26 @@ async function generateScorecard(userId: number): Promise<void> {
   }, 3000);
 }
 
-function buildSolutionText(session: SolutionSession): string {
+async function buildSolutionText(session: SolutionSession): Promise<string> {
   const { questions, currentIndex, userAnswers } = session;
   const q = questions[currentIndex]!;
   const userAns = userAnswers[currentIndex];
   const correct = q.correctOptionIndex;
+  const attempts = await db.select({ userAnswers: userHistoryTable.userAnswers })
+    .from(userHistoryTable)
+    .where(eq(userHistoryTable.testId, session.testId));
+  let answeredCount = 0;
+  let correctCount = 0;
+  for (const attempt of attempts) {
+    const answers = Array.isArray(attempt.userAnswers) ? attempt.userAnswers : [];
+    const answer = answers[currentIndex];
+    if (typeof answer !== "number" || answer < 0) continue;
+    answeredCount++;
+    if (answer === correct) correctCount++;
+  }
+  const communityAccuracy = answeredCount > 0
+    ? `${((correctCount / answeredCount) * 100).toFixed(1)}%`
+    : "Not enough data";
 
   const optionLines = q.options.map((opt, i) => {
     let prefix = "⚪";
@@ -442,6 +457,8 @@ function buildSolutionText(session: SolutionSession): string {
     `*${escMd(q.question)}*\n\n` +
     `${optionLines.join("\n")}\n\n` +
     `${statusLine}\n\n` +
+    `📈 *Community performance:* ${escMd(communityAccuracy)} answered correctly\n` +
+    `_Based on ${answeredCount} attempted response${answeredCount === 1 ? "" : "s"} from this test\\._\n\n` +
     `📝 *Explanation:*\n${escMd(q.explanation || "No explanation provided.")}`
   );
 }
@@ -457,7 +474,7 @@ export function registerQuizHandlers(bot: Bot): void {
     }
     session.solution.currentIndex = 0;
     updateSession(userId, { solution: session.solution });
-    await ctx.editMessageText(buildSolutionText(session.solution), {
+    await ctx.editMessageText(await buildSolutionText(session.solution), {
       parse_mode: "MarkdownV2",
       reply_markup: solutionNavKeyboard(0, session.solution.questions.length, session.solution.testId),
     });
@@ -470,7 +487,7 @@ export function registerQuizHandlers(bot: Bot): void {
     const idx = parseInt(ctx.callbackQuery.data.split("_")[2] ?? "0", 10);
     session.solution.currentIndex = Math.max(0, idx - 1);
     updateSession(ctx.from.id, { solution: session.solution });
-    await ctx.editMessageText(buildSolutionText(session.solution), {
+    await ctx.editMessageText(await buildSolutionText(session.solution), {
       parse_mode: "MarkdownV2",
       reply_markup: solutionNavKeyboard(session.solution.currentIndex, session.solution.questions.length, session.solution.testId),
     });
@@ -483,7 +500,7 @@ export function registerQuizHandlers(bot: Bot): void {
     const idx = parseInt(ctx.callbackQuery.data.split("_")[2] ?? "0", 10);
     session.solution.currentIndex = Math.min(session.solution.questions.length - 1, idx + 1);
     updateSession(ctx.from.id, { solution: session.solution });
-    await ctx.editMessageText(buildSolutionText(session.solution), {
+    await ctx.editMessageText(await buildSolutionText(session.solution), {
       parse_mode: "MarkdownV2",
       reply_markup: solutionNavKeyboard(session.solution.currentIndex, session.solution.questions.length, session.solution.testId),
     });
@@ -732,7 +749,7 @@ Keep total response under 180 words. Plain English only. No bullet symbols excep
       reply_markup: { inline_keyboard: [[{ text: "📖 Review Q1", callback_data: "view_solutions" }]] },
     });
 
-    await ctx.reply(buildSolutionText(sol), {
+    await ctx.reply(await buildSolutionText(sol), {
       parse_mode: "MarkdownV2",
       reply_markup: solutionNavKeyboard(0, questions.length, attempt.testId),
     });
