@@ -13,6 +13,7 @@ import { registerLiveTestHandlers, startLiveTestScheduler } from "./handlers/liv
 import { registerGroupQuizHandlers } from "./handlers/group-quiz.js";
 import { registerCustomTestHandlers } from "./handlers/custom-test.js";
 import { registerSupportHandlers } from "./handlers/support.js";
+import { registerVipHandlers, startVipAccessScheduler } from "./handlers/vip.js";
 import { logger } from "../lib/logger.js";
 import { emitTelemetry } from "../lib/telemetry.js";
 
@@ -37,6 +38,7 @@ registerLiveTestHandlers(bot);
 registerGroupQuizHandlers(bot);
 registerCustomTestHandlers(bot);
 registerSupportHandlers(bot);
+registerVipHandlers(bot);
 
 bot.callbackQuery("ad_noop", async (ctx) => {
   await ctx.answerCallbackQuery({ text: "⏳ Please wait for the timer...", show_alert: false });
@@ -62,6 +64,7 @@ export function startBot(): void {
         { command: "mysets", description: "View your custom test sets" },
         { command: "stats", description: "View performance stats" },
         { command: "support", description: "Contact support" },
+         { command: "vip", description: "Open your VIP group access" },
       ]).catch((error) => logger.warn({ error }, "Could not publish bot command menu"));
       emitTelemetry(`Bot started: @${info.username}`);
 
@@ -70,6 +73,7 @@ export function startBot(): void {
       }, 5 * 60 * 1000);
 
       startLiveTestScheduler();
+      startVipAccessScheduler();
     },
     allowed_updates: ["message", "callback_query", "poll_answer", "chat_member", "pre_checkout_query"],
   }).catch((err) => {

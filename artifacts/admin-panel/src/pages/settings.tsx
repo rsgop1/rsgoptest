@@ -16,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Save, Send, Megaphone, Settings as SettingsIcon, Users, Download, Upload, Plus, Trash2 } from "lucide-react";
+import { Save, Send, Megaphone, Settings as SettingsIcon, Users, Download, Upload, Plus, Trash2, Crown, RefreshCw, ShieldCheck, RotateCw } from "lucide-react";
 import { useRef } from "react";
 
 interface BotGroup {
@@ -36,6 +36,10 @@ export default function Settings() {
     leaderboard_channel: "",
     anon_doubt_group: "",
     bot_groups: "[]",
+    vip_group_id: "-1004496413344",
+    vip_enabled: "true",
+    vip_access_code: "VIP-2026",
+    vip_welcome_message: "Welcome to the VIP study group. Your premium access is active.",
   });
 
   const [broadcastMsg, setBroadcastMsg] = useState("");
@@ -43,6 +47,9 @@ export default function Settings() {
   const [botGroups, setBotGroups] = useState<BotGroup[]>([]);
   const [newGroupId, setNewGroupId] = useState("");
   const [newGroupName, setNewGroupName] = useState("");
+  const [vipMessage, setVipMessage] = useState("");
+  const [vipActionLoading, setVipActionLoading] = useState(false);
+  const [vipStatus, setVipStatus] = useState<any>(null);
 
   useEffect(() => {
     if (settings) {
@@ -54,6 +61,10 @@ export default function Settings() {
         leaderboard_channel: s.leaderboard_channel || "",
         anon_doubt_group: s.anon_doubt_group || "",
         bot_groups: s.bot_groups || "[]",
+        vip_group_id: s.vip_group_id || "-1004496413344",
+        vip_enabled: s.vip_enabled || "true",
+        vip_access_code: s.vip_access_code || "VIP-2026",
+        vip_welcome_message: s.vip_welcome_message || "Welcome to the VIP study group. Your premium access is active.",
       });
       try {
         setBotGroups(JSON.parse(s.bot_groups || "[]"));
@@ -96,6 +107,41 @@ export default function Settings() {
     if (!broadcastMsg) return;
     if (confirm(`Send this broadcast to ${broadcastTarget}?`)) {
       broadcastMutation.mutate({ data: { message: broadcastMsg, target: broadcastTarget } });
+    }
+  };
+
+  const runVipAction = async (action: string, body?: unknown) => {
+    setVipActionLoading(true);
+    try {
+      const response = await fetch(`/api/admin/vip/${action}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "VIP action failed");
+      if (action === "rotate-code") setFormData((current) => ({ ...current, vip_access_code: result.accessCode }));
+      toast({ title: "VIP action complete", description: result.accessCode ? `New access code: ${result.accessCode}` : undefined });
+    } catch (error) {
+      toast({ title: "VIP action failed", description: error instanceof Error ? error.message : "Check bot permissions.", variant: "destructive" });
+    } finally {
+      setVipActionLoading(false);
+    }
+  };
+
+  const checkVipStatus = async () => {
+    setVipActionLoading(true);
+    try {
+      const response = await fetch("/api/admin/vip/status", { credentials: "include" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Unable to check VIP group");
+      setVipStatus(result);
+      toast({ title: "VIP group connected", description: `${result.groupTitle} · Bot: ${result.botStatus}` });
+    } catch (error) {
+      toast({ title: "VIP connection failed", description: error instanceof Error ? error.message : "Check group ID and bot admin permissions.", variant: "destructive" });
+    } finally {
+      setVipActionLoading(false);
     }
   };
 
@@ -163,6 +209,50 @@ export default function Settings() {
         <h1 className="text-3xl font-bold tracking-tight">Platform Settings</h1>
         <p className="text-muted-foreground mt-1">Configure bot behavior, payments, groups, and exports.</p>
       </div>
+
+      <Card className="shadow-sm border-t-4 border-t-violet-500">
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Crown className="h-5 w-5 text-violet-600" />
+            <CardTitle>VIP Premium Group Control</CardTitle>
+          </div>
+          <CardDescription>Premium activation sends a personal invite. Expired users are automatically removed by the bot.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-2 md:col-span-2">
+              <Label>VIP Group Chat ID</Label>
+              <Input value={formData.vip_group_id} onChange={(e) => setFormData({ ...formData, vip_group_id: e.target.value })} placeholder="-1004496413344" />
+              <p className="text-xs text-muted-foreground">Configured group: -1004496413344. Bot must be an admin with invite and ban permissions.</p>
+            </div>
+            <div className="flex items-end gap-2">
+              <Button type="button" variant="outline" className="flex-1" disabled={vipActionLoading} onClick={checkVipStatus}><ShieldCheck className="mr-2 h-4 w-4" />Check access</Button>
+              <Switch checked={formData.vip_enabled === "true"} onCheckedChange={(checked) => setFormData({ ...formData, vip_enabled: checked ? "true" : "false" })} />
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>VIP Access Code</Label>
+              <div className="flex gap-2"><Input value={formData.vip_access_code} onChange={(e) => setFormData({ ...formData, vip_access_code: e.target.value })} /><Button type="button" variant="outline" disabled={vipActionLoading} onClick={() => runVipAction("rotate-code")}><RotateCw className="h-4 w-4" /></Button></div>
+              <p className="text-xs text-muted-foreground">Backup access for support cases. Rotate it anytime.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>VIP Welcome Message</Label>
+              <Input value={formData.vip_welcome_message} onChange={(e) => setFormData({ ...formData, vip_welcome_message: e.target.value })} />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ data: { ...formData, bot_groups: JSON.stringify(botGroups) } as any })}><Save className="mr-2 h-4 w-4" />Save VIP configuration</Button>
+            <Button type="button" variant="outline" disabled={vipActionLoading} onClick={() => runVipAction("test-message")}><Send className="mr-2 h-4 w-4" />Send test message</Button>
+            <Button type="button" variant="outline" disabled={vipActionLoading} onClick={() => runVipAction("sync")}><RefreshCw className="mr-2 h-4 w-4" />Sync active Premium users</Button>
+          </div>
+          {vipStatus && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"><b>{vipStatus.groupTitle}</b> connected · Bot status: {vipStatus.botStatus} · ID: {vipStatus.groupId}</div>}
+          <div className="space-y-2 border-t pt-4">
+            <Label>Send announcement to VIP group</Label>
+            <div className="flex gap-2"><Textarea value={vipMessage} onChange={(e) => setVipMessage(e.target.value)} placeholder="Share an exclusive update, study plan, or live session announcement…" /><Button type="button" disabled={!vipMessage.trim() || vipActionLoading} onClick={async () => { await runVipAction("message", { message: vipMessage }); setVipMessage(""); }}><Megaphone className="mr-2 h-4 w-4" />Send</Button></div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 md:grid-cols-2">
         {/* Global Config */}

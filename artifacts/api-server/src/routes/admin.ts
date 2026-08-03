@@ -23,6 +23,7 @@ import { setConfig, getConfig } from "../bot/handlers/helpers.js";
 import { logger } from "../lib/logger.js";
 import { telemetryEmitter, getRecentEvents, emitTelemetry } from "../lib/telemetry.js";
 import { createHmac, randomBytes } from "crypto";
+import { getVipConfig, grantVipAccess, removeVipAccess, rotateVipAccessCode, syncVipAccess } from "../bot/handlers/vip.js";
 
 const ADMIN_PASSWORD = "rsg@123";
 const COOKIE_NAME = "tbadmin";
@@ -746,6 +747,10 @@ router.get("/settings", requireAuth, async (_req: Request, res: Response) => {
       leaderboard_channel: cfg["leaderboard_channel"] ?? "",
       bot_groups: cfg["bot_groups"] ?? "[]",
       anon_doubt_group: cfg["anon_doubt_group"] ?? "",
+      vip_group_id: cfg["vip_group_id"] ?? "-1004496413344",
+      vip_enabled: cfg["vip_enabled"] ?? "true",
+      vip_access_code: cfg["vip_access_code"] ?? "VIP-2026",
+      vip_welcome_message: cfg["vip_welcome_message"] ?? "Welcome to the VIP study group. Your premium access is active.",
     });
   } catch (err) {
     logger.error({ err }, "Admin settings error");
@@ -763,6 +768,63 @@ router.post("/settings", requireAuth, async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "Error saving settings");
     res.status(500).json({ error: "Failed to save settings" });
+  }
+});
+
+router.get("/vip/status", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const config = await getVipConfig();
+    const groupId = Number(config.groupId);
+    const api = getApi();
+    const chat = await api.getChat(groupId);
+    const me = await api.getMe();
+    const botMember = await api.getChatMember(groupId, me.id);
+    res.json({ ...config, groupTitle: "title" in chat ? chat.title : "VIP Group", botStatus: botMember.status });
+  } catch (err) {
+    logger.warn({ err }, "VIP status check failed");
+    res.status(400).json({ error: "Unable to access VIP group. Check the group ID and ensure the bot is an administrator." });
+  }
+});
+
+router.post("/vip/sync", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, ...(await syncVipAccess()) });
+  } catch (err) {
+    logger.error({ err }, "VIP sync failed");
+    res.status(500).json({ error: "VIP sync failed" });
+  }
+});
+
+router.post("/vip/rotate-code", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const accessCode = await rotateVipAccessCode();
+    res.json({ success: true, accessCode });
+  } catch (err) {
+    res.status(500).json({ error: "Could not rotate VIP access code" });
+  }
+});
+
+router.post("/vip/message", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const message = String((req.body as { message?: string }).message ?? "").trim();
+    if (!message) { res.status(400).json({ error: "Message required" }); return; }
+    const config = await getVipConfig();
+    const groupId = Number(config.groupId);
+    const posted = await getApi().sendMessage(groupId, `💎 VIP UPDATE\n\n${message}`);
+    res.json({ success: true, messageId: posted.message_id });
+  } catch (err) {
+    logger.error({ err }, "VIP group message failed");
+    res.status(400).json({ error: "Could not send message to VIP group" });
+  }
+});
+
+router.post("/vip/test-message", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const config = await getVipConfig();
+    const posted = await getApi().sendMessage(Number(config.groupId), "✅ VIP group connection is working. This is a test message from the Admin Panel.");
+    res.json({ success: true, messageId: posted.message_id });
+  } catch (err) {
+    res.status(400).json({ error: "Could not send test message. Check bot admin permissions." });
   }
 });
 
@@ -862,6 +924,7 @@ router.post("/users/:userId/premium", requireAuth, async (req: Request, res: Res
       .where(eq(usersTable.userId, userId));
 
     await getApi().sendMessage(userId, `💎 Premium access updated!\n\nYou now have Premium access until ${base.toLocaleDateString("en-IN")}.\n\nEnjoy unlimited premium features!`).catch(() => {});
+    await grantVipAccess(userId, "Admin premium grant");
     emitTelemetry(`Admin granted ${days} premium days to user ${userId}`);
     res.json({ success: true, message: `Premium granted until ${base.toISOString()}`, premiumExpiry: base.toISOString() });
   } catch (err) {
@@ -883,6 +946,7 @@ router.delete("/users/:userId/premium", requireAuth, async (req: Request, res: R
       return;
     }
     await db.update(usersTable).set({ tier: "Free", premiumExpiry: null }).where(eq(usersTable.userId, userId));
+    await removeVipAccess(userId);
     await getApi().sendMessage(userId, "Your Premium access has been ended by admin. Contact support if you have questions.").catch(() => {});
     emitTelemetry(`Admin revoked premium for user ${userId}`);
     res.json({ success: true, message: "Premium access revoked" });
