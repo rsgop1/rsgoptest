@@ -9,6 +9,72 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface LearnerWebSession {
+  userId: number;
+  fullName: string;
+  /** @nullable */
+  username: string | null;
+  tier: string;
+  /** @nullable */
+  premiumExpiry: string | null;
+}
+
+export interface LearnerQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  section: string;
+  /** @nullable */
+  imageUrl?: string | null;
+}
+
+export interface LearnerTest {
+  testId: string;
+  testName: string;
+  mainCategory: string;
+  subCategory: string;
+  positiveMarking: number;
+  negativeMarking: number;
+  timerSeconds: number;
+  questionCount: number;
+  sections: string[];
+  questions: LearnerQuestion[];
+}
+
+export type LearnerAttemptInputAnswers = {[key: string]: number};
+
+export interface LearnerAttemptInput {
+  token: string;
+  testId: string;
+  answers: LearnerAttemptInputAnswers;
+  markedForReview: string[];
+  /** @minimum 0 */
+  timeSpentSeconds: number;
+}
+
+export interface LearnerSectionResult {
+  name: string;
+  attempted: number;
+  correct: number;
+  incorrect: number;
+  score: number;
+}
+
+export interface LearnerResult {
+  attemptId: number;
+  testName: string;
+  totalQuestions: number;
+  attempted: number;
+  correct: number;
+  incorrect: number;
+  skipped: number;
+  score: number;
+  maxScore: number;
+  accuracy: number;
+  rankPercentile: number;
+  sections: LearnerSectionResult[];
+}
+
 export interface SuccessResult {
   success: boolean;
   message: string;
@@ -181,6 +247,15 @@ export interface SupportTicketUpdate {
   /** @nullable */
   adminNote?: string | null;
 }
+
+export type LearnerGetWebSessionParams = {
+token: string;
+};
+
+export type LearnerGetTestSeriesParams = {
+testId: string;
+token: string;
+};
 
 export type AdminListPaymentsParams = {
 status?: string;

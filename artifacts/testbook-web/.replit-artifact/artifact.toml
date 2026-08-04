@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/testbook-web/"
+title = "Testbook Web Mock Tests"
+description = "A premium NTA and TCS-style web mock-test experience for Telegram Testbook users, with section navigation, question palette, timer, marking, review, and detailed results."
+version = "1.0.0"
+id = "artifacts/testbook-web"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/testbook-web/" ]
+localPort = 24766
+
+[services.development]
+run = "pnpm --filter @workspace/testbook-web run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/testbook-web", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/testbook-web/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24766"
+BASE_PATH = "/testbook-web/"

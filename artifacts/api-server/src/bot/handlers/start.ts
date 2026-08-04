@@ -21,6 +21,7 @@ import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
 import { homeKeyboard } from "./navigation.js";
+import { createLearnerWebToken } from "../../routes/learner.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -185,8 +186,8 @@ export function registerStartHandlers(bot: Bot): void {
           return;
         }
 
-        const [user] = await db.select({ tier: usersTable.tier }).from(usersTable).where(eq(usersTable.userId, from.id)).limit(1);
-        const isPremium = user?.tier === "Premium";
+        const [user] = await db.select({ tier: usersTable.tier, premiumExpiry: usersTable.premiumExpiry }).from(usersTable).where(eq(usersTable.userId, from.id)).limit(1);
+        const isPremium = user?.tier === "Premium" && !!user.premiumExpiry && user.premiumExpiry > new Date();
         const isFree = test.priceInr === 0 && test.priceInStars === 0;
         const [purchased] = await db.select().from(purchasedTestsTable)
           .where(eq(purchasedTestsTable.userId, from.id))
@@ -197,6 +198,8 @@ export function registerStartHandlers(bot: Bot): void {
         const qCount = Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 0;
         const botUsername = ctx.me.username ?? "gt_testprobot";
         const shareLink = `https://t.me/${botUsername}?start=test_${testId}`;
+        const webBaseUrl = await getConfig("web_app_url") ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}/testbook-web/` : "");
+        const webUrl = isPremium && webBaseUrl ? `${webBaseUrl.replace(/\/?$/, "/")}?testId=${encodeURIComponent(testId)}&token=${encodeURIComponent(createLearnerWebToken(from.id, testId))}` : undefined;
 
         await ctx.reply(
           `📋 *${escMd(test.testName.trim())}*\n\n` +
@@ -209,7 +212,7 @@ export function registerStartHandlers(bot: Bot): void {
           (hasAccess ? `Tap *Start Test* to begin\\!` : `❌ *You don't have access to this test\\.*`),
           {
             parse_mode: "MarkdownV2",
-            reply_markup: hasAccess ? testDetailWithStartKeyboard(testId) : undefined,
+            reply_markup: hasAccess ? testDetailWithStartKeyboard(testId, webUrl) : undefined,
           }
         );
 

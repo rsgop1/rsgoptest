@@ -21,3 +21,4 @@
 - [AI provider secrets](ai-provider-secrets.md) — provider selection is DB config, but API keys stay in Replit Secrets and are never stored through the admin app.
 - [Premium activation and coupons](premium-activation-coupons.md) — all Premium grants share one activation path; 100% coupons grant Premium and VIP instantly with redemption audit.
 - [Admin user 360 and alerts](admin-user-360-alerts.md) — consolidated user profile endpoint powers profile, commerce, activity, support, and actionable dashboard alerts.
+- [Premium web mock tests](premium-web-mock-tests.md) — Telegram issues short-lived signed learner links; web runner and Telegram attempts share user history.

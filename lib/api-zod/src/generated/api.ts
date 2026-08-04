@@ -17,6 +17,66 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
+ * @summary Validate a Telegram premium web-session token
+ */
+export const LearnerGetWebSessionQueryParams = zod.object({
+  "token": zod.coerce.string()
+})
+
+export const LearnerGetWebSessionResponse = zod.object({
+  "userId": zod.number(),
+  "fullName": zod.string(),
+  "username": zod.string().nullable(),
+  "tier": zod.string(),
+  "premiumExpiry": zod.coerce.date().nullable()
+})
+
+
+/**
+ * @summary Get a premium test for the web runner
+ */
+export const LearnerGetTestSeriesQueryParams = zod.object({
+  "testId": zod.coerce.string(),
+  "token": zod.coerce.string()
+})
+
+export const LearnerGetTestSeriesResponse = zod.object({
+  "testId": zod.string(),
+  "testName": zod.string(),
+  "mainCategory": zod.string(),
+  "subCategory": zod.string(),
+  "positiveMarking": zod.number(),
+  "negativeMarking": zod.number(),
+  "timerSeconds": zod.number(),
+  "questionCount": zod.number(),
+  "sections": zod.array(zod.string()),
+  "questions": zod.array(zod.object({
+  "id": zod.string(),
+  "question": zod.string(),
+  "options": zod.array(zod.string()),
+  "section": zod.string(),
+  "imageUrl": zod.string().nullish()
+}))
+})
+
+
+/**
+ * @summary Submit a completed web mock-test attempt
+ */
+export const learnerSubmitAttemptBodyTimeSpentSecondsMin = 0;
+
+
+
+export const LearnerSubmitAttemptBody = zod.object({
+  "token": zod.string(),
+  "testId": zod.string(),
+  "answers": zod.record(zod.string(), zod.number()),
+  "markedForReview": zod.array(zod.string()),
+  "timeSpentSeconds": zod.number().min(learnerSubmitAttemptBodyTimeSpentSecondsMin)
+})
+
+
+/**
  * @summary Admin login
  */
 export const AdminLoginBody = zod.object({

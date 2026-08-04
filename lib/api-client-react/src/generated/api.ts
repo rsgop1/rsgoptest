@@ -35,6 +35,12 @@ import type {
   FlashSale,
   FlashSaleInput,
   HealthStatus,
+  LearnerAttemptInput,
+  LearnerGetTestSeriesParams,
+  LearnerGetWebSessionParams,
+  LearnerResult,
+  LearnerTest,
+  LearnerWebSession,
   Payment,
   SuccessResult,
   SupportTicket,
@@ -131,6 +137,245 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
 
 
 
+
+export const getLearnerGetWebSessionUrl = (params: LearnerGetWebSessionParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/learner/web-session?${stringifiedParams}` : `/api/learner/web-session`
+}
+
+/**
+ * @summary Validate a Telegram premium web-session token
+ */
+export const learnerGetWebSession = async (params: LearnerGetWebSessionParams, options?: RequestInit): Promise<LearnerWebSession> => {
+
+  return customFetch<LearnerWebSession>(getLearnerGetWebSessionUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getLearnerGetWebSessionQueryKey = (params?: LearnerGetWebSessionParams,) => {
+    return [
+    `/api/learner/web-session`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getLearnerGetWebSessionQueryOptions = <TData = Awaited<ReturnType<typeof learnerGetWebSession>>, TError = ErrorType<void>>(params: LearnerGetWebSessionParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof learnerGetWebSession>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getLearnerGetWebSessionQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof learnerGetWebSession>>> = ({ signal }) => learnerGetWebSession(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof learnerGetWebSession>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type LearnerGetWebSessionQueryResult = NonNullable<Awaited<ReturnType<typeof learnerGetWebSession>>>
+export type LearnerGetWebSessionQueryError = ErrorType<void>
+
+
+/**
+ * @summary Validate a Telegram premium web-session token
+ */
+
+export function useLearnerGetWebSession<TData = Awaited<ReturnType<typeof learnerGetWebSession>>, TError = ErrorType<void>>(
+ params: LearnerGetWebSessionParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof learnerGetWebSession>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getLearnerGetWebSessionQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getLearnerGetTestSeriesUrl = (params: LearnerGetTestSeriesParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/learner/test?${stringifiedParams}` : `/api/learner/test`
+}
+
+/**
+ * @summary Get a premium test for the web runner
+ */
+export const learnerGetTestSeries = async (params: LearnerGetTestSeriesParams, options?: RequestInit): Promise<LearnerTest> => {
+
+  return customFetch<LearnerTest>(getLearnerGetTestSeriesUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getLearnerGetTestSeriesQueryKey = (params?: LearnerGetTestSeriesParams,) => {
+    return [
+    `/api/learner/test`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getLearnerGetTestSeriesQueryOptions = <TData = Awaited<ReturnType<typeof learnerGetTestSeries>>, TError = ErrorType<void>>(params: LearnerGetTestSeriesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof learnerGetTestSeries>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getLearnerGetTestSeriesQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof learnerGetTestSeries>>> = ({ signal }) => learnerGetTestSeries(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof learnerGetTestSeries>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type LearnerGetTestSeriesQueryResult = NonNullable<Awaited<ReturnType<typeof learnerGetTestSeries>>>
+export type LearnerGetTestSeriesQueryError = ErrorType<void>
+
+
+/**
+ * @summary Get a premium test for the web runner
+ */
+
+export function useLearnerGetTestSeries<TData = Awaited<ReturnType<typeof learnerGetTestSeries>>, TError = ErrorType<void>>(
+ params: LearnerGetTestSeriesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof learnerGetTestSeries>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getLearnerGetTestSeriesQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getLearnerSubmitAttemptUrl = () => {
+
+
+
+
+  return `/api/learner/attempts`
+}
+
+/**
+ * @summary Submit a completed web mock-test attempt
+ */
+export const learnerSubmitAttempt = async (learnerAttemptInput: LearnerAttemptInput, options?: RequestInit): Promise<LearnerResult> => {
+
+  return customFetch<LearnerResult>(getLearnerSubmitAttemptUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      learnerAttemptInput,)
+  }
+);}
+
+
+
+
+export const getLearnerSubmitAttemptMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof learnerSubmitAttempt>>, TError,{data: BodyType<LearnerAttemptInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof learnerSubmitAttempt>>, TError,{data: BodyType<LearnerAttemptInput>}, TContext> => {
+
+const mutationKey = ['learnerSubmitAttempt'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof learnerSubmitAttempt>>, {data: BodyType<LearnerAttemptInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  learnerSubmitAttempt(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LearnerSubmitAttemptMutationResult = NonNullable<Awaited<ReturnType<typeof learnerSubmitAttempt>>>
+    export type LearnerSubmitAttemptMutationBody = BodyType<LearnerAttemptInput>
+    export type LearnerSubmitAttemptMutationError = ErrorType<void>
+
+    /**
+ * @summary Submit a completed web mock-test attempt
+ */
+export const useLearnerSubmitAttempt = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof learnerSubmitAttempt>>, TError,{data: BodyType<LearnerAttemptInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof learnerSubmitAttempt>>,
+        TError,
+        {data: BodyType<LearnerAttemptInput>},
+        TContext
+      > => {
+      return useMutation(getLearnerSubmitAttemptMutationOptions(options));
+    }
 
 export const getAdminLoginUrl = () => {
 

@@ -52,9 +52,10 @@ export function scorecardKeyboard(testId: string): InlineKeyboard {
     .text("🔄 Re-Attempt", `reattempt_${testId}`).text("📊 My Attempts", `my_attempts_${testId}`);
 }
 
-export function reattemptChoiceKeyboard(testId: string): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("🚀 Start Now", `begin_test_${testId}`).row()
+export function reattemptChoiceKeyboard(testId: string, webUrl?: string): InlineKeyboard {
+  const kb = new InlineKeyboard().text("🚀 Continue on Telegram", `begin_test_${testId}`).row();
+  if (webUrl) kb.url("🖥️ Continue on Web App", webUrl).row();
+  return kb
     .text("📊 My Attempts", `my_attempts_${testId}`).row()
     .text("⬅️ Back to Tests", "go_test_series");
 }
@@ -77,10 +78,10 @@ export function testDetailKeyboard(testId: string): InlineKeyboard {
     .text("📚 View All Tests", "go_test_series");
 }
 
-export function testDetailWithStartKeyboard(testId: string): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("🚀 Start Test", `begin_test_${testId}`).row()
-    .text("📚 All Tests", "go_test_series");
+export function testDetailWithStartKeyboard(testId: string, webUrl?: string): InlineKeyboard {
+  const kb = new InlineKeyboard().text("🚀 Continue on Telegram", `begin_test_${testId}`).row();
+  if (webUrl) kb.url("🖥️ Continue on Web App", webUrl).row();
+  return kb.text("📚 All Tests", "go_test_series");
 }
 
 export function timerSelectKeyboard(testId: string, isPremium: boolean): InlineKeyboard {

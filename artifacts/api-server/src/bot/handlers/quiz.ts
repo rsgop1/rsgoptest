@@ -26,6 +26,7 @@ import { emitTelemetry } from "../../lib/telemetry.js";
 import { checkAndAwardAchievements } from "./achievements.js";
 import { InlineKeyboard } from "grammy";
 import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
+import { createLearnerWebToken } from "../../routes/learner.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -969,7 +970,10 @@ Keep total response under 180 words. Plain English only. No bullet symbols excep
       .limit(1);
 
     const { testDetailWithStartKeyboard, reattemptChoiceKeyboard } = await import("../keyboards.js");
-    const keyboard = prevAttempt ? reattemptChoiceKeyboard(testId) : testDetailWithStartKeyboard(testId);
+    const isActivePremium = isPremium && !!userRow?.premiumExpiry && userRow.premiumExpiry > new Date();
+    const webBaseUrl = await getConfig("web_app_url") ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}/testbook-web/` : "");
+    const webUrl = isActivePremium && webBaseUrl ? `${webBaseUrl.replace(/\/?$/, "/")}?testId=${encodeURIComponent(testId)}&token=${encodeURIComponent(createLearnerWebToken(userId, testId))}` : undefined;
+    const keyboard = prevAttempt ? reattemptChoiceKeyboard(testId, webUrl) : testDetailWithStartKeyboard(testId, webUrl);
     const reattemptNote = prevAttempt ? `\n\n🔄 _You've attempted this test before\\!_` : "";
 
     await ctx.reply(

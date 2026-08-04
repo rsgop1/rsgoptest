@@ -8,6 +8,7 @@ servers:
     description: Base API path
 tags:
   - name: health
+  - name: learner-tests
   - name: admin-auth
   - name: admin-dashboard
   - name: admin-payments
@@ -27,6 +28,73 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /learner/web-session:
+    get:
+      operationId: learnerGetWebSession
+      tags: [learner-tests]
+      summary: Validate a Telegram premium web-session token
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Valid learner session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LearnerWebSession"
+        "401":
+          description: Invalid or expired token
+
+  /learner/test:
+    get:
+      operationId: learnerGetTestSeries
+      tags: [learner-tests]
+      summary: Get a premium test for the web runner
+      parameters:
+        - in: query
+          name: testId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Test details and questions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LearnerTest"
+        "401":
+          description: Premium access required
+        "404":
+          description: Test not found
+
+  /learner/attempts:
+    post:
+      operationId: learnerSubmitAttempt
+      tags: [learner-tests]
+      summary: Submit a completed web mock-test attempt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LearnerAttemptInput"
+      responses:
+        "201":
+          description: Attempt saved and scored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LearnerResult"
+        "401":
+          description: Premium access required
 
   /admin/auth/login:
     post:
@@ -496,6 +564,93 @@ components:
       properties:
         status:
           type: string
+
+    LearnerWebSession:
+      type: object
+      required: [userId, fullName, username, tier, premiumExpiry]
+      properties:
+        userId: { type: integer }
+        fullName: { type: string }
+        username: { type: ["string", "null"] }
+        tier: { type: string }
+        premiumExpiry: { type: ["string", "null"], format: date-time }
+
+    LearnerTest:
+      type: object
+      required: [testId, testName, mainCategory, subCategory, positiveMarking, negativeMarking, timerSeconds, questionCount, sections, questions]
+      properties:
+        testId: { type: string }
+        testName: { type: string }
+        mainCategory: { type: string }
+        subCategory: { type: string }
+        positiveMarking: { type: number }
+        negativeMarking: { type: number }
+        timerSeconds: { type: integer }
+        questionCount: { type: integer }
+        sections:
+          type: array
+          items: { type: string }
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/LearnerQuestion"
+
+    LearnerQuestion:
+      type: object
+      required: [id, question, options, section]
+      properties:
+        id: { type: string }
+        question: { type: string }
+        options:
+          type: array
+          items: { type: string }
+        section: { type: string }
+        imageUrl: { type: ["string", "null"] }
+
+    LearnerAttemptInput:
+      type: object
+      required: [token, testId, answers, markedForReview, timeSpentSeconds]
+      properties:
+        token: { type: string }
+        testId: { type: string }
+        answers:
+          type: object
+          additionalProperties:
+            type: integer
+        markedForReview:
+          type: array
+          items: { type: string }
+        timeSpentSeconds: { type: integer, minimum: 0 }
+
+    LearnerResult:
+      type: object
+      required: [attemptId, testName, totalQuestions, attempted, correct, incorrect, skipped, score, maxScore, accuracy, rankPercentile, sections]
+      properties:
+        attemptId: { type: integer }
+        testName: { type: string }
+        totalQuestions: { type: integer }
+        attempted: { type: integer }
+        correct: { type: integer }
+        incorrect: { type: integer }
+        skipped: { type: integer }
+        score: { type: number }
+        maxScore: { type: number }
+        accuracy: { type: number }
+        rankPercentile: { type: number }
+        sections:
+          type: array
+          items:
+            $ref: "#/components/schemas/LearnerSectionResult"
+
+    LearnerSectionResult:
+      type: object
+      required: [name, attempted, correct, incorrect, score]
+      properties:
+        name: { type: string }
+        attempted: { type: integer }
+        correct: { type: integer }
+        incorrect: { type: integer }
+        score: { type: number }
 
     SuccessResult:
       type: object
