@@ -1,5 +1,6 @@
 import type { Bot, Context } from "grammy";
 import { InlineKeyboard } from "grammy";
+import { practiceStartKeyboard } from "../keyboards.js";
 import { db } from "@workspace/db";
 import { userCustomSetsTable, usersTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
@@ -632,8 +633,35 @@ export function registerCustomTestHandlers(bot: Bot): void {
     });
     await ctx.reply(
       `🔢 This custom test has ${set.questionCount} questions.\n\n` +
-      `Enter the question number you want to start from (1-${set.questionCount}).`,
+      `Choose the question number you want to start from.`,
+      { reply_markup: practiceStartKeyboard(String(set.id), set.questionCount, "customset_start") },
     );
+  });
+
+  bot.callbackQuery(/^customset_start_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const raw = ctx.callbackQuery.data.replace("customset_start_", "");
+    const isCustom = raw.startsWith("custom_");
+    const setId = Number(isCustom ? raw.slice("custom_".length) : raw.slice(0, raw.lastIndexOf("_")));
+    const value = isCustom ? "custom" : raw.slice(raw.lastIndexOf("_") + 1);
+    const pending = getSession(ctx.from.id).pendingCustomPractice;
+    if (!pending || pending.setId !== setId || pending.awaiting !== "start") return;
+    if (value === "custom") {
+      await ctx.reply(`✍️ Enter a question number between 1 and ${pending.totalQuestions}.`);
+      return;
+    }
+    const startQuestion = Number(value);
+    if (!Number.isInteger(startQuestion) || startQuestion < 1 || startQuestion > pending.totalQuestions) return;
+    const kb = new InlineKeyboard()
+      .text("15s", `customset_timer_${setId}_15`)
+      .text("30s", `customset_timer_${setId}_30`)
+      .text("45s", `customset_timer_${setId}_45`).row()
+      .text("60s", `customset_timer_${setId}_60`)
+      .text("90s", `customset_timer_${setId}_90`)
+      .text("Cancel", "customset_cancel_practice");
+    updateSession(ctx.from.id, { pendingCustomPractice: { ...pending, startQuestion, awaiting: "count" } });
+    try { await ctx.deleteMessage(); } catch {}
+    await ctx.reply("⏱️ Select time allowed per question:", { reply_markup: kb });
   });
 
   bot.callbackQuery(/^customset_timer_/, async (ctx) => {

@@ -106,6 +106,18 @@ export function practiceCountKeyboard(testId: string, totalQuestions: number): I
   return kb;
 }
 
+export function practiceStartKeyboard(testId: string, totalQuestions: number, prefix = "practice_start"): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (const start of [1, 5, 10, 20]) {
+    if (start <= totalQuestions) {
+      kb.text(start === 1 ? "1 (Default)" : String(start), `${prefix}_${testId}_${start}`);
+    }
+  }
+  kb.row().text("Custom", `${prefix}_custom_${testId}`);
+  kb.row().text("Cancel", "go_test_series");
+  return kb;
+}
+
 export function attemptsKeyboard(testId: string, attemptIds: number[]): InlineKeyboard {
   const kb = new InlineKeyboard();
   for (let i = 0; i < attemptIds.length; i++) {

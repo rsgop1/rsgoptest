@@ -18,7 +18,7 @@ import {
   type SolutionSession,
 } from "../session.js";
 import { getApi } from "../api-instance.js";
-import { scorecardKeyboard, solutionNavKeyboard, attemptsKeyboard, reattemptChoiceKeyboard, skipQuestionKeyboard, practiceCountKeyboard } from "../keyboards.js";
+import { scorecardKeyboard, solutionNavKeyboard, attemptsKeyboard, reattemptChoiceKeyboard, skipQuestionKeyboard, practiceCountKeyboard, practiceStartKeyboard, timerSelectKeyboard } from "../keyboards.js";
 import { logger } from "../../lib/logger.js";
 import { getConfig } from "./helpers.js";
 import { postChallengeResult } from "./challenge.js";
@@ -821,8 +821,8 @@ Keep total response under 180 words. Plain English only. No bullet symbols excep
         awaiting: "start",
       }});
       await ctx.reply(
-        `▶️ *Where do you want to start?*\n\nType the question serial number from which you want to continue\\.\n\nExample: type *21* to start from question 21\\.`,
-        { parse_mode: "MarkdownV2" }
+        `▶️ *Where do you want to start?*\n\nChoose the question serial number from which you want to continue\\.`,
+        { parse_mode: "MarkdownV2", reply_markup: practiceStartKeyboard(testId, qCount) }
       );
       return;
     }
@@ -834,6 +834,32 @@ Keep total response under 180 words. Plain English only. No bullet symbols excep
     }
 
     await startQuizForUser(userId, test);
+  });
+
+  bot.callbackQuery(/^practice_start_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const raw = ctx.callbackQuery.data.replace("practice_start_", "");
+    const isCustom = raw.startsWith("custom_");
+    const testId = isCustom ? raw.slice("custom_".length) : raw.slice(0, raw.lastIndexOf("_"));
+    const value = isCustom ? "custom" : raw.slice(raw.lastIndexOf("_") + 1);
+    const userId = ctx.from.id;
+    const pending = getSession(userId).pendingPractice;
+    if (!pending || pending.testId !== testId || pending.awaiting !== "start") return;
+    if (value === "custom") {
+      updateSession(userId, { pendingPractice: { ...pending, awaiting: "start" } });
+      await ctx.reply(`✍️ Enter a question number between 1 and ${pending.totalQuestions}.`);
+      return;
+    }
+    const startQuestion = Number(value);
+    if (!Number.isInteger(startQuestion) || startQuestion < 1 || startQuestion > pending.totalQuestions) return;
+    const [test] = await db.select().from(testSeriesTable).where(eq(testSeriesTable.testId, testId)).limit(1);
+    if (!test) return;
+    updateSession(userId, { pendingPractice: { ...pending, startQuestion, awaiting: "count" } });
+    try { await ctx.deleteMessage(); } catch {}
+    await ctx.reply(
+      `⏱️ *Select Your Timer*\n\n💎 Choose how long you want per question:\n_Choose ♾️ No Time Limit for self\\-paced practice_`,
+      { parse_mode: "MarkdownV2", reply_markup: timerSelectKeyboard(test.testId, true) }
+    );
   });
 
   bot.callbackQuery(/^timer_sel_/, async (ctx) => {
