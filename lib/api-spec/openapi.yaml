@@ -96,6 +96,50 @@ paths:
         "401":
           description: Premium access required
 
+  /learner/reports:
+    post:
+      operationId: learnerCreateReport
+      tags: [learner-tests]
+      summary: Report a web-test question
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LearnerReportInput"
+      responses:
+        "201":
+          description: Report submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResult"
+        "401":
+          description: Premium access required
+
+  /learner/ai-info:
+    post:
+      operationId: learnerGetAiInfo
+      tags: [learner-tests]
+      summary: Get AI tutor guidance for a web-test question
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LearnerAiInfoInput"
+      responses:
+        "200":
+          description: AI tutor response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LearnerAiInfo"
+        "401":
+          description: Premium access required
+        "503":
+          description: AI tutor unavailable
+
   /admin/auth/login:
     post:
       operationId: adminLogin
@@ -577,7 +621,7 @@ components:
 
     LearnerTest:
       type: object
-      required: [testId, testName, mainCategory, subCategory, positiveMarking, negativeMarking, timerSeconds, questionCount, sections, questions]
+      required: [testId, testName, mainCategory, subCategory, positiveMarking, negativeMarking, timerSeconds, webTimerSeconds, questionCount, sections, questions]
       properties:
         testId: { type: string }
         testName: { type: string }
@@ -586,6 +630,7 @@ components:
         positiveMarking: { type: number }
         negativeMarking: { type: number }
         timerSeconds: { type: integer }
+        webTimerSeconds: { type: integer }
         questionCount: { type: integer }
         sections:
           type: array
@@ -624,7 +669,7 @@ components:
 
     LearnerResult:
       type: object
-      required: [attemptId, testName, totalQuestions, attempted, correct, incorrect, skipped, score, maxScore, accuracy, rankPercentile, sections]
+      required: [attemptId, testName, totalQuestions, attempted, correct, incorrect, skipped, score, maxScore, accuracy, rankPercentile, timeSpentSeconds, markedForReview, telegramSynced, sections, review, strengths, focusAreas, recommendation]
       properties:
         attemptId: { type: integer }
         testName: { type: string }
@@ -637,10 +682,27 @@ components:
         maxScore: { type: number }
         accuracy: { type: number }
         rankPercentile: { type: number }
+        timeSpentSeconds: { type: integer }
+        markedForReview:
+          type: array
+          items: { type: string }
+        telegramSynced: { type: boolean }
         sections:
           type: array
           items:
             $ref: "#/components/schemas/LearnerSectionResult"
+        review:
+          type: array
+          items:
+            $ref: "#/components/schemas/LearnerQuestionReview"
+        strengths:
+          type: array
+          items: { type: string }
+        focusAreas:
+          type: array
+          items: { type: string }
+        recommendation:
+          type: string
 
     LearnerSectionResult:
       type: object
@@ -651,6 +713,48 @@ components:
         correct: { type: integer }
         incorrect: { type: integer }
         score: { type: number }
+        percentage: { type: number }
+        skipped: { type: integer }
+
+    LearnerQuestionReview:
+      type: object
+      required: [id, question, options, section, selectedOption, correctOptionIndex, explanation, status]
+      properties:
+        id: { type: string }
+        question: { type: string }
+        options:
+          type: array
+          items: { type: string }
+        section: { type: string }
+        imageUrl: { type: ["string", "null"] }
+        selectedOption: { type: ["integer", "null"] }
+        correctOptionIndex: { type: integer }
+        explanation: { type: string }
+        status: { type: string, enum: [correct, incorrect, skipped] }
+
+    LearnerReportInput:
+      type: object
+      required: [token, testId, questionId, reportText]
+      properties:
+        token: { type: string }
+        testId: { type: string }
+        questionId: { type: string }
+        reportText: { type: string, minLength: 3, maxLength: 1000 }
+
+    LearnerAiInfoInput:
+      type: object
+      required: [token, testId, questionId]
+      properties:
+        token: { type: string }
+        testId: { type: string }
+        questionId: { type: string }
+
+    LearnerAiInfo:
+      type: object
+      required: [questionId, answer]
+      properties:
+        questionId: { type: string }
+        answer: { type: string }
 
     SuccessResult:
       type: object
@@ -751,7 +855,7 @@ components:
 
     TestSeries:
       type: object
-      required: [id, testId, testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, isActive, createdAt, questionCount]
+      required: [id, testId, testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, isActive, createdAt, questionCount, timerSeconds, webTimerSeconds]
       properties:
         id:
           type: integer
@@ -777,6 +881,10 @@ components:
           type: string
         questionCount:
           type: integer
+        timerSeconds:
+          type: integer
+        webTimerSeconds:
+          type: integer
 
     TestSeriesInput:
       type: object
@@ -797,6 +905,10 @@ components:
         priceInr:
           type: integer
         priceInStars:
+          type: integer
+        timerSeconds:
+          type: integer
+        webTimerSeconds:
           type: integer
         questionsJson:
           type: string

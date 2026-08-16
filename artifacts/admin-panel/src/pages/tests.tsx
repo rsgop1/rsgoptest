@@ -36,6 +36,7 @@ interface TestForm {
   positiveMarking: number;
   negativeMarking: number;
   timerSeconds: number;
+  webTimerSeconds: number;
   language: string;
   questionsJson: string;
 }
@@ -58,6 +59,7 @@ const emptyForm = (): TestForm => ({
   positiveMarking: 1,
   negativeMarking: 0.25,
   timerSeconds: 30,
+  webTimerSeconds: 3600,
   language: "en",
   questionsJson: "",
 });
@@ -176,6 +178,7 @@ export default function Tests() {
       positiveMarking: test.positiveMarking,
       negativeMarking: test.negativeMarking,
       timerSeconds: test.timerSeconds ?? 30,
+      webTimerSeconds: test.webTimerSeconds ?? 3600,
       language: "en",
       questionsJson: "",
     });
@@ -366,8 +369,14 @@ export default function Tests() {
           <Input type="number" step="0.25" value={formData.negativeMarking} onChange={e => setFormData({ ...formData, negativeMarking: parseFloat(e.target.value) })} />
         </div>
         <div className="space-y-2">
-          <Label className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> Timer (seconds)</Label>
+          <Label className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> Telegram question timer (seconds)</Label>
           <Input type="number" min={10} max={300} value={formData.timerSeconds} onChange={e => setFormData({ ...formData, timerSeconds: parseInt(e.target.value) })} />
+          <p className="text-xs text-muted-foreground">Used by the Telegram per-question quiz.</p>
+        </div>
+        <div className="space-y-2">
+          <Label className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> Web test duration (seconds)</Label>
+          <Input type="number" min={60} max={14400} value={formData.webTimerSeconds} onChange={e => setFormData({ ...formData, webTimerSeconds: parseInt(e.target.value) || 3600 })} />
+          <p className="text-xs text-muted-foreground">Overall countdown shown in the Premium web app.</p>
         </div>
         <div className="space-y-2">
           <Label>Language</Label>
@@ -513,7 +522,7 @@ export default function Tests() {
                 <TableHead>Name</TableHead>
                 <TableHead>Category</TableHead>
                 <TableHead>Qs</TableHead>
-                <TableHead>Timer</TableHead>
+                  <TableHead>Timers</TableHead>
                 <TableHead>Pricing</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -540,7 +549,8 @@ export default function Tests() {
                   <TableCell>
                     <span className="flex items-center gap-1 text-sm">
                       <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                      {(test as any).timerSeconds ?? 30}s
+                      <span>{(test as any).timerSeconds ?? 30}s / Q</span>
+                      <span className="text-xs text-primary">Web {Math.round(((test as any).webTimerSeconds ?? 3600) / 60)} min</span>
                     </span>
                   </TableCell>
                   <TableCell className="text-sm">

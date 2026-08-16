@@ -15,6 +15,7 @@ export interface LearnerTest {
   positiveMarking: number;
   negativeMarking: number;
   timerSeconds: number;
+  webTimerSeconds: number;
   questionCount: number;
   sections: string[];
   questions: LearnerQuestion[];

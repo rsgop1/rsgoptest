@@ -15,6 +15,7 @@ export const testSeriesTable = pgTable("test_series", {
   questionsData: jsonb("questions_data").notNull().default([]),
   isActive: boolean("is_active").notNull().default(true),
   timerSeconds: integer("timer_seconds").notNull().default(30),
+  webTimerSeconds: integer("web_timer_seconds").notNull().default(3600),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

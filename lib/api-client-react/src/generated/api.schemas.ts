@@ -36,6 +36,7 @@ export interface LearnerTest {
   positiveMarking: number;
   negativeMarking: number;
   timerSeconds: number;
+  webTimerSeconds: number;
   questionCount: number;
   sections: string[];
   questions: LearnerQuestion[];
@@ -58,6 +59,31 @@ export interface LearnerSectionResult {
   correct: number;
   incorrect: number;
   score: number;
+  percentage?: number;
+  skipped?: number;
+}
+
+export type LearnerQuestionReviewStatus = typeof LearnerQuestionReviewStatus[keyof typeof LearnerQuestionReviewStatus];
+
+
+export const LearnerQuestionReviewStatus = {
+  correct: 'correct',
+  incorrect: 'incorrect',
+  skipped: 'skipped',
+} as const;
+
+export interface LearnerQuestionReview {
+  id: string;
+  question: string;
+  options: string[];
+  section: string;
+  /** @nullable */
+  imageUrl?: string | null;
+  /** @nullable */
+  selectedOption: number | null;
+  correctOptionIndex: number;
+  explanation: string;
+  status: LearnerQuestionReviewStatus;
 }
 
 export interface LearnerResult {
@@ -72,7 +98,36 @@ export interface LearnerResult {
   maxScore: number;
   accuracy: number;
   rankPercentile: number;
+  timeSpentSeconds: number;
+  markedForReview: string[];
+  telegramSynced: boolean;
   sections: LearnerSectionResult[];
+  review: LearnerQuestionReview[];
+  strengths: string[];
+  focusAreas: string[];
+  recommendation: string;
+}
+
+export interface LearnerReportInput {
+  token: string;
+  testId: string;
+  questionId: string;
+  /**
+     * @minLength 3
+     * @maxLength 1000
+     */
+  reportText: string;
+}
+
+export interface LearnerAiInfoInput {
+  token: string;
+  testId: string;
+  questionId: string;
+}
+
+export interface LearnerAiInfo {
+  questionId: string;
+  answer: string;
 }
 
 export interface SuccessResult {
@@ -148,6 +203,8 @@ export interface TestSeries {
   isActive: boolean;
   createdAt: string;
   questionCount: number;
+  timerSeconds: number;
+  webTimerSeconds: number;
 }
 
 export interface TestSeriesInput {
@@ -159,6 +216,8 @@ export interface TestSeriesInput {
   negativeMarking?: number;
   priceInr?: number;
   priceInStars?: number;
+  timerSeconds?: number;
+  webTimerSeconds?: number;
   questionsJson: string;
 }
 

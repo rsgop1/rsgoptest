@@ -12,4 +12,6 @@ export interface LearnerSectionResult {
   correct: number;
   incorrect: number;
   score: number;
+  percentage?: number;
+  skipped?: number;
 }

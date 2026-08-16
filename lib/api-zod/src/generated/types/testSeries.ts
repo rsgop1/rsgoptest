@@ -19,4 +19,6 @@ export interface TestSeries {
   isActive: boolean;
   createdAt: string;
   questionCount: number;
+  timerSeconds: number;
+  webTimerSeconds: number;
 }

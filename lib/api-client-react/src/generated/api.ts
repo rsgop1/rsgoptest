@@ -35,9 +35,12 @@ import type {
   FlashSale,
   FlashSaleInput,
   HealthStatus,
+  LearnerAiInfo,
+  LearnerAiInfoInput,
   LearnerAttemptInput,
   LearnerGetTestSeriesParams,
   LearnerGetWebSessionParams,
+  LearnerReportInput,
   LearnerResult,
   LearnerTest,
   LearnerWebSession,
@@ -375,6 +378,148 @@ export const useLearnerSubmitAttempt = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getLearnerSubmitAttemptMutationOptions(options));
+    }
+
+export const getLearnerCreateReportUrl = () => {
+
+
+
+
+  return `/api/learner/reports`
+}
+
+/**
+ * @summary Report a web-test question
+ */
+export const learnerCreateReport = async (learnerReportInput: LearnerReportInput, options?: RequestInit): Promise<SuccessResult> => {
+
+  return customFetch<SuccessResult>(getLearnerCreateReportUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      learnerReportInput,)
+  }
+);}
+
+
+
+
+export const getLearnerCreateReportMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof learnerCreateReport>>, TError,{data: BodyType<LearnerReportInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof learnerCreateReport>>, TError,{data: BodyType<LearnerReportInput>}, TContext> => {
+
+const mutationKey = ['learnerCreateReport'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof learnerCreateReport>>, {data: BodyType<LearnerReportInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  learnerCreateReport(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LearnerCreateReportMutationResult = NonNullable<Awaited<ReturnType<typeof learnerCreateReport>>>
+    export type LearnerCreateReportMutationBody = BodyType<LearnerReportInput>
+    export type LearnerCreateReportMutationError = ErrorType<void>
+
+    /**
+ * @summary Report a web-test question
+ */
+export const useLearnerCreateReport = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof learnerCreateReport>>, TError,{data: BodyType<LearnerReportInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof learnerCreateReport>>,
+        TError,
+        {data: BodyType<LearnerReportInput>},
+        TContext
+      > => {
+      return useMutation(getLearnerCreateReportMutationOptions(options));
+    }
+
+export const getLearnerGetAiInfoUrl = () => {
+
+
+
+
+  return `/api/learner/ai-info`
+}
+
+/**
+ * @summary Get AI tutor guidance for a web-test question
+ */
+export const learnerGetAiInfo = async (learnerAiInfoInput: LearnerAiInfoInput, options?: RequestInit): Promise<LearnerAiInfo> => {
+
+  return customFetch<LearnerAiInfo>(getLearnerGetAiInfoUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      learnerAiInfoInput,)
+  }
+);}
+
+
+
+
+export const getLearnerGetAiInfoMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof learnerGetAiInfo>>, TError,{data: BodyType<LearnerAiInfoInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof learnerGetAiInfo>>, TError,{data: BodyType<LearnerAiInfoInput>}, TContext> => {
+
+const mutationKey = ['learnerGetAiInfo'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof learnerGetAiInfo>>, {data: BodyType<LearnerAiInfoInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  learnerGetAiInfo(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LearnerGetAiInfoMutationResult = NonNullable<Awaited<ReturnType<typeof learnerGetAiInfo>>>
+    export type LearnerGetAiInfoMutationBody = BodyType<LearnerAiInfoInput>
+    export type LearnerGetAiInfoMutationError = ErrorType<void>
+
+    /**
+ * @summary Get AI tutor guidance for a web-test question
+ */
+export const useLearnerGetAiInfo = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof learnerGetAiInfo>>, TError,{data: BodyType<LearnerAiInfoInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof learnerGetAiInfo>>,
+        TError,
+        {data: BodyType<LearnerAiInfoInput>},
+        TContext
+      > => {
+      return useMutation(getLearnerGetAiInfoMutationOptions(options));
     }
 
 export const getAdminLoginUrl = () => {

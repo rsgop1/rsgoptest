@@ -15,5 +15,7 @@ export interface TestSeriesInput {
   negativeMarking?: number;
   priceInr?: number;
   priceInStars?: number;
+  timerSeconds?: number;
+  webTimerSeconds?: number;
   questionsJson: string;
 }

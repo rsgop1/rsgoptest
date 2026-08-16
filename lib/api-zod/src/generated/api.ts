@@ -48,6 +48,7 @@ export const LearnerGetTestSeriesResponse = zod.object({
   "positiveMarking": zod.number(),
   "negativeMarking": zod.number(),
   "timerSeconds": zod.number(),
+  "webTimerSeconds": zod.number(),
   "questionCount": zod.number(),
   "sections": zod.array(zod.string()),
   "questions": zod.array(zod.object({
@@ -73,6 +74,37 @@ export const LearnerSubmitAttemptBody = zod.object({
   "answers": zod.record(zod.string(), zod.number()),
   "markedForReview": zod.array(zod.string()),
   "timeSpentSeconds": zod.number().min(learnerSubmitAttemptBodyTimeSpentSecondsMin)
+})
+
+
+/**
+ * @summary Report a web-test question
+ */
+export const learnerCreateReportBodyReportTextMin = 3;
+export const learnerCreateReportBodyReportTextMax = 1000;
+
+
+
+export const LearnerCreateReportBody = zod.object({
+  "token": zod.string(),
+  "testId": zod.string(),
+  "questionId": zod.string(),
+  "reportText": zod.string().min(learnerCreateReportBodyReportTextMin).max(learnerCreateReportBodyReportTextMax)
+})
+
+
+/**
+ * @summary Get AI tutor guidance for a web-test question
+ */
+export const LearnerGetAiInfoBody = zod.object({
+  "token": zod.string(),
+  "testId": zod.string(),
+  "questionId": zod.string()
+})
+
+export const LearnerGetAiInfoResponse = zod.object({
+  "questionId": zod.string(),
+  "answer": zod.string()
 })
 
 
@@ -241,7 +273,9 @@ export const AdminListTestsResponseItem = zod.object({
   "priceInStars": zod.number(),
   "isActive": zod.boolean(),
   "createdAt": zod.string(),
-  "questionCount": zod.number()
+  "questionCount": zod.number(),
+  "timerSeconds": zod.number(),
+  "webTimerSeconds": zod.number()
 })
 export const AdminListTestsResponse = zod.array(AdminListTestsResponseItem)
 
@@ -258,6 +292,8 @@ export const AdminImportTestBody = zod.object({
   "negativeMarking": zod.number().optional(),
   "priceInr": zod.number().optional(),
   "priceInStars": zod.number().optional(),
+  "timerSeconds": zod.number().optional(),
+  "webTimerSeconds": zod.number().optional(),
   "questionsJson": zod.string()
 })
 

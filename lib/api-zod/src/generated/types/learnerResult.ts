@@ -5,6 +5,7 @@
  * Testbook+ Admin API
  * OpenAPI spec version: 0.1.0
  */
+import type { LearnerQuestionReview } from './learnerQuestionReview';
 import type { LearnerSectionResult } from './learnerSectionResult';
 
 export interface LearnerResult {
@@ -19,5 +20,12 @@ export interface LearnerResult {
   maxScore: number;
   accuracy: number;
   rankPercentile: number;
+  timeSpentSeconds: number;
+  markedForReview: string[];
+  telegramSynced: boolean;
   sections: LearnerSectionResult[];
+  review: LearnerQuestionReview[];
+  strengths: string[];
+  focusAreas: string[];
+  recommendation: string;
 }

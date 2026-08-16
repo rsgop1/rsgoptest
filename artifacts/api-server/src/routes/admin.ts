@@ -360,6 +360,7 @@ router.get("/tests", requireAuth, async (_req: Request, res: Response) => {
       priceInStars: t.priceInStars,
       isActive: t.isActive,
       timerSeconds: t.timerSeconds,
+      webTimerSeconds: t.webTimerSeconds,
       createdAt: t.createdAt.toISOString(),
       questionCount: Array.isArray(t.questionsData) ? t.questionsData.length : 0,
       questionsData: t.questionsData,
@@ -373,7 +374,7 @@ router.get("/tests", requireAuth, async (_req: Request, res: Response) => {
 router.post("/tests", requireAuth, async (req: Request, res: Response) => {
   try {
     const body = req.body as Record<string, string | number>;
-    const { testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, questionsJson, timerSeconds, language } = body as Record<string, string>;
+    const { testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, questionsJson, timerSeconds, webTimerSeconds, language } = body as Record<string, string>;
 
     let questions: unknown[];
     try {
@@ -387,6 +388,7 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
     const autoTestId = generateTestId();
     const lang = (language ?? "en") as "en" | "hi";
     const timerSec = Math.max(10, parseInt(String(timerSeconds ?? "30")) || 30);
+    const webTimerSec = Math.min(14400, Math.max(60, parseInt(String(webTimerSeconds ?? "3600")) || 3600));
 
     const questionsWithIds = (questions as QuestionData[]).map((q, i) => ({
       id: `${autoTestId}_q${i}`,
@@ -408,6 +410,7 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
       priceInStars: parseInt(String(priceInStars ?? "0")),
       questionsData: questionsWithIds,
       timerSeconds: timerSec,
+      webTimerSeconds: webTimerSec,
     }).returning();
 
     emitTelemetry(`New test imported: "${testName}" (ID: ${autoTestId}) — ${questionsWithIds.length} questions`);
@@ -423,6 +426,7 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
       priceInStars: inserted!.priceInStars,
       isActive: inserted!.isActive,
       timerSeconds: inserted!.timerSeconds,
+      webTimerSeconds: inserted!.webTimerSeconds,
       createdAt: inserted!.createdAt.toISOString(),
       questionCount: questionsWithIds.length,
     });
@@ -436,7 +440,7 @@ router.put("/tests/:testId", requireAuth, async (req: Request, res: Response) =>
   try {
     const testId = String(req.params["testId"]);
     const body = req.body as Record<string, string | number>;
-    const { testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, timerSeconds, language, questionsJson } = body as Record<string, string>;
+    const { testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, timerSeconds, webTimerSeconds, language, questionsJson } = body as Record<string, string>;
 
     const updateData: Record<string, unknown> = {};
     if (testName !== undefined) updateData["testName"] = testName;
@@ -447,6 +451,7 @@ router.put("/tests/:testId", requireAuth, async (req: Request, res: Response) =>
     if (priceInr !== undefined) updateData["priceInr"] = parseInt(String(priceInr));
     if (priceInStars !== undefined) updateData["priceInStars"] = parseInt(String(priceInStars));
     if (timerSeconds !== undefined) updateData["timerSeconds"] = Math.max(10, parseInt(String(timerSeconds)) || 30);
+    if (webTimerSeconds !== undefined) updateData["webTimerSeconds"] = Math.min(14400, Math.max(60, parseInt(String(webTimerSeconds)) || 3600));
 
     if (questionsJson) {
       let questions: unknown[];
@@ -484,6 +489,7 @@ router.put("/tests/:testId", requireAuth, async (req: Request, res: Response) =>
       priceInStars: updated.priceInStars,
       isActive: updated.isActive,
       timerSeconds: updated.timerSeconds,
+      webTimerSeconds: updated.webTimerSeconds,
       questionCount: Array.isArray(updated.questionsData) ? updated.questionsData.length : 0,
     });
   } catch (err) {
