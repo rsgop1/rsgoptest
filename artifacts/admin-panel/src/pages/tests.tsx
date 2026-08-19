@@ -31,6 +31,8 @@ interface TestForm {
   testName: string;
   mainCategory: string;
   subCategory: string;
+  subject: string;
+  subSubject: string;
   priceInr: number;
   priceInStars: number;
   positiveMarking: number;
@@ -54,6 +56,8 @@ const emptyForm = (): TestForm => ({
   testName: "",
   mainCategory: "",
   subCategory: "",
+  subject: "General",
+  subSubject: "General",
   priceInr: 0,
   priceInStars: 0,
   positiveMarking: 1,
@@ -71,6 +75,7 @@ export default function Tests() {
   const [, navigate] = useLocation();
 
   const [categories, setCategories] = useState<CategoryMap>({});
+  const [subjects, setSubjects] = useState<CategoryMap>({});
   const [importOpen, setImportOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editTestId, setEditTestId] = useState<string | null>(null);
@@ -85,6 +90,9 @@ export default function Tests() {
 
   const [newMainCat, setNewMainCat] = useState("");
   const [newSubCat, setNewSubCat] = useState("");
+  const [newSubject, setNewSubject] = useState("");
+  const [newSubSubject, setNewSubSubject] = useState("");
+  const [taxonomySubject, setTaxonomySubject] = useState("");
   const [showNewMain, setShowNewMain] = useState(false);
   const [showNewSub, setShowNewSub] = useState(false);
 
@@ -92,6 +100,13 @@ export default function Tests() {
     fetch(`${BASE}/categories`, { credentials: "include" })
       .then(r => r.json())
       .then((cats: CategoryMap) => setCategories(cats))
+      .catch(() => {});
+    fetch(`${BASE}/subjects`, { credentials: "include" })
+      .then(r => r.json())
+      .then((value: CategoryMap) => {
+        setSubjects(value);
+        setTaxonomySubject(Object.keys(value)[0] ?? "");
+      })
       .catch(() => {});
   }, []);
 
@@ -142,6 +157,47 @@ export default function Tests() {
     }
   };
 
+  const refreshSubjects = async () => {
+    const r = await fetch(`${BASE}/subjects`, { credentials: "include" });
+    if (!r.ok) return;
+    const value = await r.json() as CategoryMap;
+    setSubjects(value);
+    if (!taxonomySubject) setTaxonomySubject(Object.keys(value)[0] ?? "");
+  };
+
+  const addSubject = async () => {
+    if (!newSubject.trim()) return;
+    const r = await fetch(`${BASE}/subjects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ subject: newSubject.trim() }),
+    });
+    if (r.ok) {
+      const value = await r.json() as CategoryMap;
+      setSubjects(value);
+      setTaxonomySubject(newSubject.trim());
+      setNewSubject("");
+      toast({ title: "Subject added" });
+    }
+  };
+
+  const addSubSubject = async () => {
+    if (!taxonomySubject || !newSubSubject.trim()) return;
+    const r = await fetch(`${BASE}/subjects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ subject: taxonomySubject, subSubject: newSubSubject.trim() }),
+    });
+    if (r.ok) {
+      const value = await r.json() as CategoryMap;
+      setSubjects(value);
+      setNewSubSubject("");
+      toast({ title: "Sub-subject added" });
+    }
+  };
+
   const handleImport = async (e: React.FormEvent) => {
     e.preventDefault();
     try { JSON.parse(formData.questionsJson); } catch {
@@ -173,6 +229,8 @@ export default function Tests() {
       testName: test.testName,
       mainCategory: test.mainCategory,
       subCategory: test.subCategory,
+      subject: test.subject ?? "General",
+      subSubject: test.subSubject ?? "General",
       priceInr: test.priceInr,
       priceInStars: test.priceInStars,
       positiveMarking: test.positiveMarking,
@@ -289,6 +347,8 @@ export default function Tests() {
 
   const mainCategories = Object.keys(categories);
   const subCategories = formData.mainCategory ? (categories[formData.mainCategory] ?? []) : [];
+  const subjectOptions = Object.keys(subjects);
+  const subSubjectOptions = formData.subject ? (subjects[formData.subject] ?? []) : [];
 
   const renderFormFields = (isEdit = false) => (
     <div className="space-y-6 mt-4">
@@ -350,6 +410,26 @@ export default function Tests() {
               <Button type="button" variant="ghost" size="sm" onClick={() => setShowNewSub(false)}>✕</Button>
             </div>
           )}
+        </div>
+
+        <div className="space-y-2">
+          <Label>Subject</Label>
+          <Select value={formData.subject} onValueChange={v => setFormData({ ...formData, subject: v, subSubject: "" })}>
+            <SelectTrigger><SelectValue placeholder="Select subject" /></SelectTrigger>
+            <SelectContent>
+              {subjectOptions.map(subject => <SelectItem key={subject} value={subject}>{subject}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Sub-subject</Label>
+          <Select value={formData.subSubject} onValueChange={v => setFormData({ ...formData, subSubject: v })} disabled={!formData.subject}>
+            <SelectTrigger><SelectValue placeholder={!formData.subject ? "Select subject first" : "Select sub-subject"} /></SelectTrigger>
+            <SelectContent>
+              {subSubjectOptions.map(subSubject => <SelectItem key={subSubject} value={subSubject}>{subSubject}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="space-y-2">
@@ -430,6 +510,37 @@ export default function Tests() {
           <Plus className="h-4 w-4 mr-2" /> Import Test
         </Button>
       </div>
+
+      <Card>
+        <CardContent className="p-5 space-y-4">
+          <div>
+            <h2 className="font-semibold">Subject Library</h2>
+            <p className="text-sm text-muted-foreground">Manage the subjects and sub-subjects shown in Telegram Test Series.</p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+            <div className="flex gap-2">
+              <Input value={newSubject} onChange={e => setNewSubject(e.target.value)} placeholder="New subject, e.g. Computer" />
+              <Button type="button" variant="outline" onClick={addSubject}><Plus className="h-4 w-4 mr-1" /> Add</Button>
+            </div>
+            <div className="flex gap-2">
+              <Select value={taxonomySubject} onValueChange={setTaxonomySubject}>
+                <SelectTrigger><SelectValue placeholder="Choose subject" /></SelectTrigger>
+                <SelectContent>{subjectOptions.map(subject => <SelectItem key={subject} value={subject}>{subject}</SelectItem>)}</SelectContent>
+              </Select>
+              <Input value={newSubSubject} onChange={e => setNewSubSubject(e.target.value)} placeholder="New sub-subject" />
+              <Button type="button" variant="outline" onClick={addSubSubject} disabled={!taxonomySubject}><Plus className="h-4 w-4 mr-1" /> Add</Button>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {subjectOptions.map(subject => (
+              <div key={subject} className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge>{subject}</Badge>
+                {(subjects[subject] ?? []).map(subSubject => <Badge key={subSubject} variant="secondary">{subSubject}</Badge>)}
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">

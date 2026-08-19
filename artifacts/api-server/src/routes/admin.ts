@@ -354,6 +354,8 @@ router.get("/tests", requireAuth, async (_req: Request, res: Response) => {
       testName: t.testName,
       mainCategory: t.mainCategory,
       subCategory: t.subCategory,
+      subject: t.subject,
+      subSubject: t.subSubject,
       positiveMarking: t.positiveMarking,
       negativeMarking: t.negativeMarking,
       priceInr: t.priceInr,
@@ -374,7 +376,7 @@ router.get("/tests", requireAuth, async (_req: Request, res: Response) => {
 router.post("/tests", requireAuth, async (req: Request, res: Response) => {
   try {
     const body = req.body as Record<string, string | number>;
-    const { testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, questionsJson, timerSeconds, webTimerSeconds, language } = body as Record<string, string>;
+    const { testName, mainCategory, subCategory, subject, subSubject, positiveMarking, negativeMarking, priceInr, priceInStars, questionsJson, timerSeconds, webTimerSeconds, language } = body as Record<string, string>;
 
     let questions: unknown[];
     try {
@@ -404,6 +406,8 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
       testName,
       mainCategory,
       subCategory,
+      subject: subject?.trim() || "General",
+      subSubject: subSubject?.trim() || "General",
       positiveMarking: parseFloat(String(positiveMarking ?? "1")),
       negativeMarking: parseFloat(String(negativeMarking ?? "0.25")),
       priceInr: parseInt(String(priceInr ?? "0")),
@@ -420,6 +424,8 @@ router.post("/tests", requireAuth, async (req: Request, res: Response) => {
       testName: inserted!.testName,
       mainCategory: inserted!.mainCategory,
       subCategory: inserted!.subCategory,
+      subject: inserted!.subject,
+      subSubject: inserted!.subSubject,
       positiveMarking: inserted!.positiveMarking,
       negativeMarking: inserted!.negativeMarking,
       priceInr: inserted!.priceInr,
@@ -440,12 +446,14 @@ router.put("/tests/:testId", requireAuth, async (req: Request, res: Response) =>
   try {
     const testId = String(req.params["testId"]);
     const body = req.body as Record<string, string | number>;
-    const { testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, timerSeconds, webTimerSeconds, language, questionsJson } = body as Record<string, string>;
+    const { testName, mainCategory, subCategory, subject, subSubject, positiveMarking, negativeMarking, priceInr, priceInStars, timerSeconds, webTimerSeconds, language, questionsJson } = body as Record<string, string>;
 
     const updateData: Record<string, unknown> = {};
     if (testName !== undefined) updateData["testName"] = testName;
     if (mainCategory !== undefined) updateData["mainCategory"] = mainCategory;
     if (subCategory !== undefined) updateData["subCategory"] = subCategory;
+    if (subject !== undefined) updateData["subject"] = subject.trim() || "General";
+    if (subSubject !== undefined) updateData["subSubject"] = subSubject.trim() || "General";
     if (positiveMarking !== undefined) updateData["positiveMarking"] = parseFloat(String(positiveMarking));
     if (negativeMarking !== undefined) updateData["negativeMarking"] = parseFloat(String(negativeMarking));
     if (priceInr !== undefined) updateData["priceInr"] = parseInt(String(priceInr));
@@ -483,6 +491,8 @@ router.put("/tests/:testId", requireAuth, async (req: Request, res: Response) =>
       testName: updated.testName,
       mainCategory: updated.mainCategory,
       subCategory: updated.subCategory,
+      subject: updated.subject,
+      subSubject: updated.subSubject,
       positiveMarking: updated.positiveMarking,
       negativeMarking: updated.negativeMarking,
       priceInr: updated.priceInr,
@@ -648,6 +658,55 @@ router.post("/categories", requireAuth, async (req: Request, res: Response) => {
     res.json(cats);
   } catch (err) {
     res.status(500).json({ error: "Failed to update categories" });
+  }
+});
+
+const DEFAULT_SUBJECTS: Record<string, string[]> = {
+  Maths: ["Arithmetic", "Algebra", "Geometry", "Trigonometry", "Data Interpretation"],
+  GK: ["History", "Polity", "Geography", "Economics", "General Science"],
+  English: ["Grammar", "Vocabulary", "Reading Comprehension", "Cloze Test"],
+  Reasoning: ["Verbal Reasoning", "Non-Verbal Reasoning", "Puzzles", "Analogy", "Series"],
+  "Current Affairs": ["National", "International", "Economy", "Sports", "Science & Technology"],
+};
+
+router.get("/subjects", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const raw = await getConfig("subjects");
+    const subjects = raw ? JSON.parse(raw) as Record<string, string[]> : DEFAULT_SUBJECTS;
+    res.json(subjects);
+  } catch {
+    res.status(500).json({ error: "Failed to load subjects" });
+  }
+});
+
+router.post("/subjects", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { subject, subSubject } = req.body as { subject?: string; subSubject?: string };
+    const name = subject?.trim();
+    const child = subSubject?.trim();
+    if (!name) { res.status(400).json({ error: "Subject name is required" }); return; }
+    const raw = await getConfig("subjects");
+    const subjects = raw ? JSON.parse(raw) as Record<string, string[]> : { ...DEFAULT_SUBJECTS };
+    subjects[name] ??= [];
+    if (child && !subjects[name]!.includes(child)) subjects[name]!.push(child);
+    await setConfig("subjects", JSON.stringify(subjects));
+    res.json(subjects);
+  } catch {
+    res.status(500).json({ error: "Failed to update subjects" });
+  }
+});
+
+router.delete("/subjects/:subject/:subSubject", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const subject = decodeURIComponent(String(req.params["subject"] ?? ""));
+    const subSubject = decodeURIComponent(String(req.params["subSubject"] ?? ""));
+    const raw = await getConfig("subjects");
+    const subjects = raw ? JSON.parse(raw) as Record<string, string[]> : { ...DEFAULT_SUBJECTS };
+    if (subjects[subject]) subjects[subject] = subjects[subject]!.filter((item) => item !== subSubject);
+    await setConfig("subjects", JSON.stringify(subjects));
+    res.json(subjects);
+  } catch {
+    res.status(500).json({ error: "Failed to delete sub-subject" });
   }
 });
 

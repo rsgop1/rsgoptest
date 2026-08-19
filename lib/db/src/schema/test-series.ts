@@ -8,6 +8,8 @@ export const testSeriesTable = pgTable("test_series", {
   testName: text("test_name").notNull(),
   mainCategory: text("main_category").notNull(),
   subCategory: text("sub_category").notNull(),
+  subject: text("subject").notNull().default("General"),
+  subSubject: text("sub_subject").notNull().default("General"),
   positiveMarking: doublePrecision("positive_marking").notNull().default(1),
   negativeMarking: doublePrecision("negative_marking").notNull().default(0.25),
   priceInr: integer("price_inr").notNull().default(0),

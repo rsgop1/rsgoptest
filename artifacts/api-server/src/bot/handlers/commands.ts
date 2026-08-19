@@ -69,6 +69,93 @@ function formatIST(date: Date): string {
   });
 }
 
+const DEFAULT_SUBJECTS: Record<string, string[]> = {
+  Maths: ["Arithmetic", "Algebra", "Geometry", "Trigonometry", "Data Interpretation"],
+  GK: ["History", "Polity", "Geography", "Economics", "General Science"],
+  English: ["Grammar", "Vocabulary", "Reading Comprehension", "Cloze Test"],
+  Reasoning: ["Verbal Reasoning", "Non-Verbal Reasoning", "Puzzles", "Analogy", "Series"],
+  "Current Affairs": ["National", "International", "Economy", "Sports", "Science & Technology"],
+};
+
+async function loadSubjects(): Promise<Record<string, string[]>> {
+  const raw = await getConfig("subjects");
+  if (!raw) return DEFAULT_SUBJECTS;
+  try {
+    return JSON.parse(raw) as Record<string, string[]>;
+  } catch {
+    return DEFAULT_SUBJECTS;
+  }
+}
+
+function subjectIcon(subject: string): string {
+  return ({ Maths: "➗", GK: "🌍", English: "🔤", Reasoning: "🧠", "Current Affairs": "📰" } as Record<string, string>)[subject] ?? "📘";
+}
+
+function subjectKey(value: string): string {
+  return encodeURIComponent(value).replace(/%/g, "~");
+}
+
+function decodeSubjectKey(value: string): string {
+  return decodeURIComponent(value.replace(/~/g, "%"));
+}
+
+function subjectKeyboard(subjects: Record<string, string[]>): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  Object.keys(subjects).forEach((subject, index) => {
+    kb.text(`${subjectIcon(subject)} ${subject}`, `browse_subject_${subjectKey(subject)}`);
+    if (index % 2 === 1) kb.row();
+  });
+  if (Object.keys(subjects).length % 2 === 1) kb.row();
+  return kb.text("📋 All Tests", "browse_all_tests");
+}
+
+function subSubjectKeyboard(subject: string, subSubjects: string[]): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  subSubjects.forEach((subSubject, index) => {
+    kb.text(`• ${subSubject}`, `browse_subsubject_${subjectKey(subject)}_${subjectKey(subSubject)}`);
+    if (index % 2 === 1) kb.row();
+  });
+  if (subSubjects.length % 2 === 1) kb.row();
+  return kb.text(`📚 All ${subject}`, `browse_subject_all_${subjectKey(subject)}`).row()
+    .text("⬅️ Subjects", "browse_subjects");
+}
+
+async function renderTestList(ctx: any, subject?: string, subSubject?: string): Promise<void> {
+  const userId = ctx.from.id;
+  const [user, purchased] = await Promise.all([
+    db.select().from(usersTable).where(eq(usersTable.userId, userId)).limit(1),
+    db.select().from(purchasedTestsTable).where(eq(purchasedTestsTable.userId, userId)),
+  ]);
+  const filters = [eq(testSeriesTable.isActive, true)];
+  if (subject) filters.push(eq(testSeriesTable.subject, subject));
+  if (subSubject) filters.push(eq(testSeriesTable.subSubject, subSubject));
+  const tests = await db.select().from(testSeriesTable).where(and(...filters));
+  const purchasedIds = new Set(purchased.map((p) => p.testId));
+  const isPremium = user[0]?.tier === "Premium";
+  const title = subSubject ? `${subjectIcon(subject ?? "")} ${subject} › ${subSubject}` : subject ? `${subjectIcon(subject)} ${subject}` : "📋 All Tests";
+
+  if (!tests.length) {
+    await ctx.editMessageText(
+      `📚 *${escMd(title)}*\n\n_Abhi is section mein tests available nahi hain\\._`,
+      { parse_mode: "MarkdownV2", reply_markup: subject ? subSubjectKeyboard(subject, (await loadSubjects())[subject] ?? []) : subjectKeyboard(await loadSubjects()) },
+    );
+    return;
+  }
+
+  const kb = new InlineKeyboard();
+  let msg = `📚 *${escMd(title)}*\n\n_Choose a test to view details:_\n\n`;
+  for (const test of tests) {
+    const free = test.priceInr === 0 && test.priceInStars === 0;
+    const access = free || isPremium || purchasedIds.has(test.testId);
+    const qCount = Array.isArray(test.questionsData) ? test.questionsData.length : 0;
+    msg += `${access ? "🔓" : "🔒"} *${escMd(test.testName.trim())}*\n`;
+    msg += `   ${escMd(test.mainCategory)} · ${qCount} Q · ${test.timerSeconds ?? 30}s/Q\n\n`;
+    kb.text(`${access ? "🔓" : "🔒"} ${test.testName.trim().slice(0, 28)}`, `start_test_${test.testId}`).row();
+  }
+  kb.text("⬅️ Subjects", "browse_subjects");
+  await ctx.editMessageText(msg, { parse_mode: "MarkdownV2", reply_markup: kb });
+}
+
 export function registerCommandHandlers(bot: Bot): void {
   bot.command("help", async (ctx) => {
     await ctx.reply(
@@ -172,52 +259,60 @@ export function registerCommandHandlers(bot: Bot): void {
 
   bot.command("test_series", async (ctx) => {
     try {
-      const userId = ctx.from!.id;
-      const [user] = await db.select().from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
-      const tests = await db.select().from(testSeriesTable).where(eq(testSeriesTable.isActive, true));
-
-      if (!tests.length) {
+      const subjects = await loadSubjects();
+      const testCount = await db.select({ count: sql<number>`count(*)::int` }).from(testSeriesTable).where(eq(testSeriesTable.isActive, true));
+      if (!testCount[0]?.count) {
         await ctx.reply("📭 No tests available yet\\. Check back soon\\!", { parse_mode: "MarkdownV2" });
         return;
       }
-
-      const purchased = await db.select().from(purchasedTestsTable).where(eq(purchasedTestsTable.userId, userId));
-      const purchasedIds = new Set(purchased.map(p => p.testId));
-      const isPremium = user?.tier === "Premium";
-
-      let msg = "📚 *Available Mock Tests:*\n_Click any test to see details before starting_\n\n";
-      const kb = new InlineKeyboard();
-
-      for (const test of tests) {
-        const isFree = test.priceInr === 0 && test.priceInStars === 0;
-        const hasAccess = isFree || isPremium || purchasedIds.has(test.testId);
-        const sale = (!hasAccess && !isFree) ? await getActiveSale(test.testId) : null;
-        const lock = hasAccess ? "🔓" : (sale ? "🔥" : "🔒");
-        const qCount = Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 0;
-
-        msg += `${lock} *${escMd(test.testName.trim())}*\n`;
-        msg += `   📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n`;
-        msg += `   📝 ${qCount} questions \\| ⏱️ ${test.timerSeconds ?? 30}s per Q\n`;
-
-        if (!isFree) {
-          if (sale) {
-            msg += `   ~~₹${test.priceInr}~~ 🔥 *₹${sale.discountInr}* \\| ⭐ ${sale.discountStars} Stars \\(SALE\\)\n`;
-          } else {
-            msg += `   💰 ₹${test.priceInr} \\| ⭐ ${test.priceInStars} Stars\n`;
-          }
-        } else {
-          msg += `   ✅ Free\n`;
-        }
-        msg += "\n";
-
-        kb.text(`${lock} ${test.testName.trim().slice(0, 30)}`, `start_test_${test.testId}`).row();
-      }
-
-      await ctx.reply(msg, { parse_mode: "MarkdownV2", reply_markup: kb });
+      await ctx.reply(
+        `📚 *Test Series Hub*\n\n` +
+        `Choose a subject to explore focused mock tests\\.\n` +
+        `_${escMd(String(testCount[0].count))} active tests available_`,
+        { parse_mode: "MarkdownV2", reply_markup: subjectKeyboard(subjects) },
+      );
     } catch (err) {
       logger.error({ err }, "test_series error");
       await ctx.reply("❌ Error loading tests. Please try again.");
     }
+  });
+
+  bot.callbackQuery("browse_subjects", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const subjects = await loadSubjects();
+    await ctx.editMessageText("📚 *Test Series Hub*\n\nChoose a subject to explore focused mock tests\\.", {
+      parse_mode: "MarkdownV2",
+      reply_markup: subjectKeyboard(subjects),
+    });
+  });
+
+  bot.callbackQuery("browse_all_tests", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await renderTestList(ctx);
+  });
+
+  bot.callbackQuery(/^browse_subject_(?!all_)/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const subject = decodeSubjectKey(ctx.callbackQuery.data.replace("browse_subject_", ""));
+    const subjects = await loadSubjects();
+    await ctx.editMessageText(`${subjectIcon(subject)} *${escMd(subject)}*\n\nChoose a focused topic:`, {
+      parse_mode: "MarkdownV2",
+      reply_markup: subSubjectKeyboard(subject, subjects[subject] ?? []),
+    });
+  });
+
+  bot.callbackQuery(/^browse_subject_all_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const subject = decodeSubjectKey(ctx.callbackQuery.data.replace("browse_subject_all_", ""));
+    await renderTestList(ctx, subject);
+  });
+
+  bot.callbackQuery(/^browse_subsubject_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const parts = ctx.callbackQuery.data.replace("browse_subsubject_", "").split("_");
+    const subject = decodeSubjectKey(parts.shift() ?? "");
+    const subSubject = decodeSubjectKey(parts.join("_"));
+    await renderTestList(ctx, subject, subSubject);
   });
 
   bot.callbackQuery(/^unlock_test_/, async (ctx) => {
