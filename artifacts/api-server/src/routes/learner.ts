@@ -8,6 +8,7 @@ import { scorecardKeyboard } from "../bot/keyboards.js";
 import { askOpenRouter, BOT_HELP_CONTEXT } from "../bot/ai.js";
 import { logger } from "../lib/logger.js";
 import { updateSession } from "../bot/session.js";
+import { getConfig } from "../bot/handlers/helpers.js";
 
 const router = Router();
 const WEB_TOKEN_SECRET = process.env["SESSION_SECRET"] ?? "fallback-secret-change-me";
@@ -24,6 +25,27 @@ function signature(value: string): string {
 export function createLearnerWebToken(userId: number, testId: string): string {
   const payload = encode({ userId, testId, exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS });
   return `${payload}.${signature(payload)}`;
+}
+
+export async function createLearnerWebUrl(userId: number, testId: string): Promise<string | undefined> {
+  const configured = (await getConfig("web_app_url"))?.trim();
+  const fallbackDomain = process.env["REPLIT_DEV_DOMAIN"]?.trim() || process.env["REPLIT_DOMAINS"]?.split(",")[0]?.trim();
+  const rawBase = configured || (fallbackDomain ? `https://${fallbackDomain}` : "");
+  if (!rawBase) return undefined;
+
+  try {
+    const parsed = new URL(rawBase.includes("://") ? rawBase : `https://${rawBase}`);
+    parsed.search = "";
+    parsed.hash = "";
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+    parsed.pathname = pathname === "" || pathname === "/" ? "/testbook-web/" : `${pathname}/`;
+    parsed.searchParams.set("testId", testId);
+    parsed.searchParams.set("token", createLearnerWebToken(userId, testId));
+    return parsed.toString();
+  } catch (error) {
+    logger.warn({ error }, "Invalid learner web app URL configuration");
+    return undefined;
+  }
 }
 
 type LearnerToken = { userId: number; testId: string; exp: number };

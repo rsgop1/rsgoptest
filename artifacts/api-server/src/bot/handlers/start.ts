@@ -21,7 +21,7 @@ import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
 import { homeKeyboard } from "./navigation.js";
-import { createLearnerWebToken } from "../../routes/learner.js";
+import { createLearnerWebUrl } from "../../routes/learner.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -198,8 +198,7 @@ export function registerStartHandlers(bot: Bot): void {
         const qCount = Array.isArray(test.questionsData) ? (test.questionsData as unknown[]).length : 0;
         const botUsername = ctx.me.username ?? "gt_testprobot";
         const shareLink = `https://t.me/${botUsername}?start=test_${testId}`;
-        const webBaseUrl = await getConfig("web_app_url") ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}/testbook-web/` : "");
-        const webUrl = isPremium && webBaseUrl ? `${webBaseUrl.replace(/\/?$/, "/")}?testId=${encodeURIComponent(testId)}&token=${encodeURIComponent(createLearnerWebToken(from.id, testId))}` : undefined;
+        const webUrl = isPremium ? await createLearnerWebUrl(from.id, testId) : undefined;
 
         await ctx.reply(
           `📋 *${escMd(test.testName.trim())}*\n\n` +
