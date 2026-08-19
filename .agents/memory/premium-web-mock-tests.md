@@ -7,4 +7,4 @@ Premium web test access is issued from Telegram as a short-lived signed token bo
 
 **Why:** The web runner is a continuation of the Telegram product, not a public test catalog, so access must remain Premium-only while preserving shared history and analytics.
 
-**How to apply:** Keep Telegram and web attempts writing the same user-history model. Configure the public web base URL rather than deriving production URLs from development environment variables.
+**How to apply:** Keep Telegram and web attempts writing the same user-history model. After a web submission, refresh the in-memory Telegram solution session so the result message's View Solutions action works. Configure the public web base URL rather than deriving production URLs from development environment variables.
