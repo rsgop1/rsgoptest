@@ -70,6 +70,7 @@ function formatIST(date: Date): string {
 }
 
 const DEFAULT_SUBJECTS: Record<string, string[]> = {
+  General: ["General"],
   Maths: ["Arithmetic", "Algebra", "Geometry", "Trigonometry", "Data Interpretation"],
   GK: ["History", "Polity", "Geography", "Economics", "General Science"],
   English: ["Grammar", "Vocabulary", "Reading Comprehension", "Cloze Test"],

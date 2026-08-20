@@ -202,7 +202,8 @@ export function registerStartHandlers(bot: Bot): void {
 
         await ctx.reply(
           `📋 *${escMd(test.testName.trim())}*\n\n` +
-          `📁 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n` +
+          `📚 ${escMd(test.subject)} → ${escMd(test.subSubject)}\n` +
+          `🎯 ${escMd(test.mainCategory)} → ${escMd(test.subCategory)}\n` +
           `📝 Questions: *${qCount}*\n` +
           `⏱️ Timer: *${test.timerSeconds ?? 30}s* per question\n` +
           `➕ Correct: *\\+${escMd(String(test.positiveMarking))}*   ➖ Wrong: *\\-${escMd(String(test.negativeMarking))}*\n` +
