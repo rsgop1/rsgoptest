@@ -855,7 +855,7 @@ components:
 
     TestSeries:
       type: object
-      required: [id, testId, testName, mainCategory, subCategory, positiveMarking, negativeMarking, priceInr, priceInStars, isActive, createdAt, questionCount, timerSeconds, webTimerSeconds]
+      required: [id, testId, testName, mainCategory, subCategory, subject, subSubject, positiveMarking, negativeMarking, priceInr, priceInStars, isActive, createdAt, questionCount, timerSeconds, webTimerSeconds]
       properties:
         id:
           type: integer
@@ -866,6 +866,10 @@ components:
         mainCategory:
           type: string
         subCategory:
+          type: string
+        subject:
+          type: string
+        subSubject:
           type: string
         positiveMarking:
           type: number
@@ -888,7 +892,7 @@ components:
 
     TestSeriesInput:
       type: object
-      required: [testId, testName, mainCategory, subCategory, questionsJson]
+      required: [testId, testName, mainCategory, subCategory, subject, subSubject, questionsJson]
       properties:
         testId:
           type: string
@@ -897,6 +901,10 @@ components:
         mainCategory:
           type: string
         subCategory:
+          type: string
+        subject:
+          type: string
+        subSubject:
           type: string
         positiveMarking:
           type: number

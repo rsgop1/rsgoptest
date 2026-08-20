@@ -662,12 +662,12 @@ router.post("/categories", requireAuth, async (req: Request, res: Response) => {
 });
 
 const DEFAULT_SUBJECTS: Record<string, string[]> = {
-  General: ["General"],
   Maths: ["Arithmetic", "Algebra", "Geometry", "Trigonometry", "Data Interpretation"],
   GK: ["History", "Polity", "Geography", "Economics", "General Science"],
   English: ["Grammar", "Vocabulary", "Reading Comprehension", "Cloze Test"],
   Reasoning: ["Verbal Reasoning", "Non-Verbal Reasoning", "Puzzles", "Analogy", "Series"],
   "Current Affairs": ["National", "International", "Economy", "Sports", "Science & Technology"],
+  General: ["General"],
 };
 
 router.get("/subjects", requireAuth, async (_req: Request, res: Response) => {

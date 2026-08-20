@@ -11,6 +11,8 @@ export interface TestSeriesInput {
   testName: string;
   mainCategory: string;
   subCategory: string;
+  subject: string;
+  subSubject: string;
   positiveMarking?: number;
   negativeMarking?: number;
   priceInr?: number;
