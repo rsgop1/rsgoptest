@@ -37,7 +37,7 @@ A full-featured Telegram educational bot (like Testbook+) with quiz engine, paym
 - Grammy long polling (not webhook) — simpler for Replit, no SSL cert needed
 - In-memory Map for active quiz sessions — fast, no DB round trips during quiz
 - Bot API singleton (`api-instance.ts`) — avoids circular imports between bot/index and handlers
-- Admin panel served from same Express server at `/admin` — no separate frontend needed
+- React admin panel is the single admin UI at `/admin-panel/`; the API server only exposes `/api/admin` and redirects the legacy `/admin` path
 - esbuild externalizes `grammy` and `qrcode` — both use dynamic requires incompatible with bundling
 
 ## Product
@@ -50,7 +50,7 @@ A full-featured Telegram educational bot (like Testbook+) with quiz engine, paym
 - `/notebook` — Practice from previously wrong questions
 - `/premium` — Upgrade via Telegram Stars or UPI QR payment
 - `/doubt` — AI doubt solver placeholder (OpenRouter integration ready to add)
-- Admin Panel at `/admin` — Login: `rsg@123`
+- Admin Panel at `/admin-panel/` — Login: `rsg@123`
   - Dashboard with live stats
   - UPI payment approval queue with screenshot viewer
   - JSON test series import wizard

@@ -3,7 +3,6 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import router from "./routes/index.js";
-import adminRouter from "./admin/router.js";
 import { logger } from "./lib/logger.js";
 
 const app: Express = express();
@@ -33,6 +32,10 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
 
 app.use("/api", router);
-app.use("/admin", adminRouter);
+// The React admin panel is the single admin UI. Keep the old API-server
+// preview path as a compatibility redirect without serving a second panel.
+app.use("/admin", (_req, res) => {
+  res.redirect(307, "/admin-panel/");
+});
 
 export default app;
