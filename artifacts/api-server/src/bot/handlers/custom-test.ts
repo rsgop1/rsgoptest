@@ -15,10 +15,11 @@ import { getApi } from "../api-instance.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 import type { QuestionData } from "@workspace/db";
-import { askOpenRouter, askOpenRouterVision, BOT_HELP_CONTEXT } from "../ai.js";
+import { askGemini, askGeminiVision, BOT_HELP_CONTEXT } from "../ai.js";
 import { getConfig } from "./helpers.js";
 
 const execFileAsync = promisify(execFile);
+const MAX_PDF_BYTES = 30 * 1024 * 1024;
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, "\\$&");
@@ -42,7 +43,10 @@ async function extractTextFromPdf(fileId: string): Promise<{ text: string; sourc
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`Failed to download PDF: ${resp.status}`);
 
+  const contentLength = Number(resp.headers.get("content-length") ?? 0);
+  if (contentLength > MAX_PDF_BYTES) throw new Error("PDF is larger than the 30 MB limit.");
   const buffer = Buffer.from(await resp.arrayBuffer());
+  if (buffer.byteLength > MAX_PDF_BYTES) throw new Error("PDF is larger than the 30 MB limit.");
   const workDir = await mkdtemp(join(tmpdir(), "testpro-pdf-"));
   const inputPath = join(workDir, "source.pdf");
   const outputPath = join(workDir, "source.txt");
@@ -90,7 +94,7 @@ async function extractTextFromPdf(fileId: string): Promise<{ text: string; sourc
     for (let index = 0; index < pageFiles.length; index += 3) {
       const batch = pageFiles.slice(index, index + 3);
       const images = await Promise.all(batch.map(async (name) => `data:image/png;base64,${(await readFile(join(workDir, name))).toString("base64")}`));
-      const transcription = await askOpenRouterVision(
+      const transcription = await askGeminiVision(
         `Transcribe these study-document pages in reading order. Page numbers: ${index + 1}-${index + batch.length}. Preserve all useful exam content, headings, formulas, examples, dates, names, tables and MCQ options. Return plain text only.`,
         images,
         { maxTokens: 6000 },
@@ -151,7 +155,7 @@ OUTPUT FORMAT (JSON array only, no other text):
 
 Generate exactly ${count} questions now:`;
 
-  const raw = await askOpenRouter([
+  const raw = await askGemini([
     {
       role: "system",
       content: `${BOT_HELP_CONTEXT}\nYou are a precise JSON-generating exam question setter. Output only valid JSON arrays. No markdown, no explanation outside JSON.`,
@@ -337,11 +341,11 @@ export function registerCustomTestHandlers(bot: Bot): void {
     const userId = ctx.from!.id;
     try {
       const [user] = await db
-        .select({ tier: usersTable.tier })
+      .select({ tier: usersTable.tier, premiumExpiry: usersTable.premiumExpiry })
         .from(usersTable)
         .where(eq(usersTable.userId, userId))
         .limit(1);
-      const isPremium = user?.tier === "Premium";
+      const isPremium = user?.tier === "Premium" && !!user.premiumExpiry && user.premiumExpiry > new Date();
 
       if (!isPremium) {
         await ctx.reply(
@@ -507,6 +511,10 @@ export function registerCustomTestHandlers(bot: Bot): void {
       await ctx.reply("❌ Please send a PDF file\\. Other file types are not supported\\.", {
         parse_mode: "MarkdownV2",
       });
+      return;
+    }
+    if ((doc.file_size ?? 0) > MAX_PDF_BYTES) {
+      await ctx.reply("❌ PDF is too large. Please send a file up to 30 MB.");
       return;
     }
 

@@ -36,7 +36,7 @@ interface AiSettings {
   scannedPdfOcrEnabled: boolean;
   provider: "openrouter" | "openai" | "gemini";
   model: string;
-  secrets: { openrouter: boolean; openai: boolean; gemini: boolean };
+  secrets: { openrouter: boolean; openai: boolean; gemini: boolean; groq: boolean };
 }
 
 interface CouponCode {
@@ -88,7 +88,7 @@ export default function AiPage() {
     scannedPdfOcrEnabled: false,
     provider: "openrouter",
     model: "",
-    secrets: { openrouter: false, openai: false, gemini: false },
+    secrets: { openrouter: false, openai: false, gemini: false, groq: false },
   });
 
   const { data: settings, isLoading: settingsLoading } = useQuery<AiSettings>({
@@ -232,7 +232,7 @@ export default function AiPage() {
                 <option value="openai">OpenAI</option>
                 <option value="gemini">Gemini</option>
               </select>
-              <p className="text-xs text-muted-foreground">The selected provider powers bot doubts, AI Info, Agentic analysis, custom quizzes, and scanned-PDF OCR.</p>
+              <p className="text-xs text-muted-foreground">Legacy provider setting for fallback integrations. Current feature routing is fixed: Gemini powers PDF tests, Smart Intelligence and AI Space; Groq powers AI Info and doubt solving.</p>
             </div>
             <div className="space-y-2">
               <Label>Model (optional)</Label>
@@ -256,6 +256,7 @@ export default function AiPage() {
               <Badge variant={form.secrets.openrouter ? "default" : "secondary"}>OpenRouter: {form.secrets.openrouter ? "configured" : "missing"}</Badge>
               <Badge variant={form.secrets.openai ? "default" : "secondary"}>OpenAI: {form.secrets.openai ? "configured" : "missing"}</Badge>
               <Badge variant={form.secrets.gemini ? "default" : "secondary"}>Gemini: {form.secrets.gemini ? "configured" : "missing"}</Badge>
+              <Badge variant={form.secrets.groq ? "default" : "secondary"}>Groq: {form.secrets.groq ? "configured" : "missing"}</Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-2">Keys stay in Replit Secrets and are never stored in the app database or displayed here. Add/update them through the secure Secrets panel.</p>
           </div>

@@ -19,7 +19,7 @@ import { getConfig } from "./helpers.js";
 import { trySetGroupTitles } from "./achievements.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
-import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
+import { askGroq, BOT_HELP_CONTEXT } from "../ai.js";
 import { homeKeyboard } from "./navigation.js";
 import { createLearnerWebUrl } from "../../routes/learner.js";
 
@@ -439,7 +439,7 @@ export function registerStartHandlers(bot: Bot): void {
 
   bot.callbackQuery("ai_menu_questions", async (ctx) => {
     await ctx.answerCallbackQuery();
-    const message = await askOpenRouter([
+    const message = await askGroq([
       { role: "system", content: `${BOT_HELP_CONTEXT}\nYou create one concise Indian competitive-exam MCQ. Return question, four options, correct answer, and a one-line explanation in plain text.` },
       { role: "user", content: "Generate one mixed SSC/Railway/Banking practice question." },
     ]);

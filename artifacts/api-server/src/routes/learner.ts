@@ -5,7 +5,7 @@ import type { QuestionData } from "@workspace/db";
 import { createHmac, timingSafeEqual } from "crypto";
 import { getApi } from "../bot/api-instance.js";
 import { scorecardKeyboard } from "../bot/keyboards.js";
-import { askOpenRouter, BOT_HELP_CONTEXT } from "../bot/ai.js";
+import { askGroq, BOT_HELP_CONTEXT } from "../bot/ai.js";
 import { logger } from "../lib/logger.js";
 import { updateSession } from "../bot/session.js";
 import { getConfig } from "../bot/handlers/helpers.js";
@@ -284,7 +284,7 @@ router.post("/ai-info", async (req: Request, res: Response) => {
   const question = normalizedQuestions(test?.questionsData).find((item) => item.id === body.questionId);
   if (!test || !question) return res.status(404).json({ error: "Question not found" });
   try {
-    const answer = await askOpenRouter([
+     const answer = await askGroq([
       { role: "system", content: `${BOT_HELP_CONTEXT}\nYou are a concise exam tutor. Use plain text, no markdown symbols.` },
       { role: "user", content: `Test: ${test.testName}\nQuestion: ${question.question}\nOptions: ${question.options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join(" | ")}\nCorrect answer: ${question.options[question.correctOptionIndex]}\nExisting explanation: ${question.explanation || "None"}\nExplain the answer in 3 short paragraphs and add one exam tip. Keep it under 180 words.` },
     ], { maxTokens: 700 });

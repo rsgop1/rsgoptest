@@ -617,17 +617,12 @@ router.get("/tests/:testId/question-analytics", requireAuth, async (req: Request
 });
 
 router.get("/agentic-analysis/status", requireAuth, async (_req: Request, res: Response) => {
-  res.json(getAgenticAnalysisStatus());
+  res.json(await getAgenticAnalysisStatus());
 });
 
 router.post("/agentic-analysis/run", requireAuth, async (_req: Request, res: Response) => {
-  try {
-    await runAgenticAnalysis();
-    res.json(getAgenticAnalysisStatus());
-  } catch (err) {
-    logger.error({ err }, "Agentic analysis manual run failed");
-    res.status(500).json({ error: "Agentic analysis run failed" });
-  }
+  void runAgenticAnalysis().catch((err) => logger.error({ err }, "Agentic analysis manual run failed"));
+  res.status(202).json(await getAgenticAnalysisStatus());
 });
 
 router.get("/categories", requireAuth, async (_req: Request, res: Response) => {
@@ -1508,6 +1503,7 @@ router.get("/ai-settings", requireAuth, async (_req: Request, res: Response) => 
         openrouter: Boolean(process.env["OPENROUTER_API_KEY"] ?? process.env["AI_INTEGRATIONS_OPENROUTER_API_KEY"]),
         openai: Boolean(process.env["OPENAI_API_KEY"]),
         gemini: Boolean(process.env["GEMINI_API_KEY"] ?? process.env["GOOGLE_API_KEY"]),
+        groq: Boolean(process.env["GROQ_API_KEY"]),
       },
     });
   } catch (err) {

@@ -10,6 +10,9 @@ export const testSeriesTable = pgTable("test_series", {
   subCategory: text("sub_category").notNull(),
   subject: text("subject").notNull().default("General"),
   subSubject: text("sub_subject").notNull().default("General"),
+  topicTags: jsonb("topic_tags").$type<string[]>().notNull().default([]),
+  topicTaggedAt: timestamp("topic_tagged_at"),
+  topicTaggingVersion: text("topic_tagging_version"),
   positiveMarking: doublePrecision("positive_marking").notNull().default(1),
   negativeMarking: doublePrecision("negative_marking").notNull().default(0.25),
   priceInr: integer("price_inr").notNull().default(0),
@@ -32,4 +35,9 @@ export interface QuestionData {
   correctOptionIndex: number;
   explanation: string;
   language?: "en" | "hi";
+  topics?: string[];
+  topic?: string;
+  skills?: string[];
+  difficulty?: "easy" | "medium" | "hard";
+  focus?: string;
 }

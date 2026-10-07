@@ -18,7 +18,7 @@ import { sendNextQuestion, startQuizForUser } from "./quiz.js";
 import { getConfig } from "./helpers.js";
 import { logger } from "../../lib/logger.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
-import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
+import { askGroq, BOT_HELP_CONTEXT } from "../ai.js";
 
 function escMd(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
@@ -408,7 +408,7 @@ export function registerCommandHandlers(bot: Bot): void {
 
       const customPrompt = await getConfig("doubt_prompt");
        const systemPrompt = `${BOT_HELP_CONTEXT}\n${customPrompt || "You are a sharp educational AI for Indian competitive exam students. Answer directly and concisely. No filler words. No markdown symbols. Max 120 words. End with one exam tip if relevant."}`;
-       const answer = await askOpenRouter([
+       const answer = await askGroq([
          { role: "system", content: systemPrompt },
          { role: "user", content: text },
        ], { maxTokens: 8192 });
@@ -559,7 +559,7 @@ export function registerCommandHandlers(bot: Bot): void {
           }
           await db.update(usersTable).set({ aiDoubtCount: usedToday + 1, aiDoubtDate: today }).where(eq(usersTable.userId, userId));
         }
-        const answer = await askOpenRouter([
+         const answer = await askGroq([
           { role: "system", content: "You are Series TestPro's exam tutor. Explain clearly for Indian competitive exam students. Answer directly, show steps for calculations, use short headings, and finish with one practice tip. Never invent facts." },
           { role: "user", content: text.slice(0, 4000) },
         ]);

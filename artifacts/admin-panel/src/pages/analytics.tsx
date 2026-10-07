@@ -133,7 +133,7 @@ function AgenticAnalysisMonitor() {
             <div className="rounded-xl bg-violet-600 p-2 text-white"><Brain className="h-5 w-5" /></div>
             <div>
               <CardTitle className="text-base">Agentic Intelligence Monitor</CardTitle>
-              <p className="text-sm text-muted-foreground">Live question intelligence worker for published test sets.</p>
+              <p className="text-sm text-muted-foreground">On-demand Gemini analysis for active test sets. Completed sets are skipped on later runs.</p>
             </div>
           </div>
           <div className="flex gap-2">
@@ -146,11 +146,12 @@ function AgenticAnalysisMonitor() {
         {error && <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"><AlertTriangle className="h-4 w-4" />{error}</div>}
         {loading && !status ? <Skeleton className="h-24 w-full" /> : status && (
           <>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
               <div className="rounded-lg border bg-background p-3"><p className="text-xs text-muted-foreground">Worker</p><p className="mt-1 font-semibold">{status.running ? "Running" : "Idle"}</p></div>
+              <div className="rounded-lg border bg-background p-3"><p className="text-xs text-muted-foreground">Active sets</p><p className="mt-1 text-xl font-bold">{status.activeSets}</p></div>
               <div className="rounded-lg border bg-background p-3"><p className="text-xs text-muted-foreground">Indexed sets</p><p className="mt-1 text-xl font-bold">{status.analyzedSets}</p></div>
+              <div className="rounded-lg border bg-background p-3"><p className="text-xs text-muted-foreground">Pending sets</p><p className="mt-1 text-xl font-bold">{status.pendingSets}</p></div>
               <div className="rounded-lg border bg-background p-3"><p className="text-xs text-muted-foreground">Indexed questions</p><p className="mt-1 text-xl font-bold">{status.analyzedQuestions}</p></div>
-              <div className="rounded-lg border bg-background p-3"><p className="text-xs text-muted-foreground">Last cycle sets</p><p className="mt-1 text-xl font-bold">{status.lastRunStats?.sets ?? 0}</p></div>
               <div className="rounded-lg border bg-background p-3"><p className="text-xs text-muted-foreground">Last completed</p><p className="mt-1 text-sm font-semibold">{status.lastCompletedAt ? new Date(status.lastCompletedAt).toLocaleTimeString() : "Not yet"}</p></div>
             </div>
             {status.lastError && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Last worker warning: {status.lastError}</div>}

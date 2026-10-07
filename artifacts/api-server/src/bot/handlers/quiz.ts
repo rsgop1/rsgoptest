@@ -25,7 +25,7 @@ import { postChallengeResult } from "./challenge.js";
 import { emitTelemetry } from "../../lib/telemetry.js";
 import { checkAndAwardAchievements } from "./achievements.js";
 import { InlineKeyboard } from "grammy";
-import { askOpenRouter, BOT_HELP_CONTEXT } from "../ai.js";
+import { askGroq, BOT_HELP_CONTEXT } from "../ai.js";
 import { createLearnerWebUrl } from "../../routes/learner.js";
 
 function escMd(text: string): string {
@@ -613,7 +613,7 @@ ${wrongOptsText}
 
 Keep total response under 180 words. Plain English only. No bullet symbols except the ones shown.`;
 
-      const rawAnswer = await askOpenRouter([
+       const rawAnswer = await askGroq([
         { role: "system", content: `${BOT_HELP_CONTEXT}\nYou are a concise educational AI for Indian competitive exam students. Always respond in plain English with no markdown formatting symbols.` },
         { role: "user", content: prompt },
       ], { maxTokens: 8192 });

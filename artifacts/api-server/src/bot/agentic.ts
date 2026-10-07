@@ -1,22 +1,33 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { testSeriesTable, userHistoryTable, usersTable } from "@workspace/db";
-import { askOpenRouter, BOT_AGENT_CONTEXT } from "./ai.js";
+import { askGemini, BOT_AGENT_CONTEXT } from "./ai.js";
 import { getApi } from "./api-instance.js";
 import { clearAgenticSession, getSession, updateSession } from "./session.js";
 import { logger } from "../lib/logger.js";
+import { getConfig } from "./handlers/helpers.js";
 
 type QuestionAnalysis = { question: string; topics: string[]; skills: string[]; difficulty: string; focus: string };
-type SetAnalysis = { topics: string[]; skills: string[]; difficulty: string; focus: string; questions: QuestionAnalysis[] };
-const setAnalysisCache = new Map<string, { analysis: SetAnalysis; updatedAt: number }>();
+const TOPIC_TAGGING_VERSION = "gemini-canonical-topics-v1";
+const DEFAULT_SUBJECTS: Record<string, string[]> = {
+  Maths: ["Arithmetic", "Algebra", "Geometry", "Trigonometry", "Data Interpretation"],
+  GK: ["History", "Polity", "Geography", "Economics", "General Science"],
+  English: ["Grammar", "Vocabulary", "Reading Comprehension", "Cloze Test"],
+  Reasoning: ["Verbal Reasoning", "Non-Verbal Reasoning", "Puzzles", "Analogy", "Series"],
+  "Current Affairs": ["National", "International", "Economy", "Sports", "Science & Technology"],
+  General: ["General"],
+};
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const TAG_REQUEST_MIN_INTERVAL_MS = 13_000;
 let analysisRunning = false;
 let lastRunAt: number | null = null;
 let lastCompletedAt: number | null = null;
 let lastError: string | null = null;
 let lastRunStats = { sets: 0, questions: 0 };
+let analysisQuotaBlockedUntil = 0;
+let lastTagRequestAt = 0;
 
 export function agenticRoomKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
@@ -169,18 +180,27 @@ function renderAgenticText(value: string): string {
 
 async function getUserInsights(userId: number): Promise<string> {
   const [user] = await db.select({
-    fullName: usersTable.fullName, tier: usersTable.tier, targetExamSub: usersTable.targetExamSub,
+    fullName: usersTable.fullName,
+    username: usersTable.username,
+    tier: usersTable.tier,
+    premiumExpiry: usersTable.premiumExpiry,
+    targetExamMain: usersTable.targetExamMain,
+    targetExamSub: usersTable.targetExamSub,
+    joinedAt: usersTable.joinedAt,
+    totalTestsTaken: usersTable.totalTestsTaken,
+    referralCount: usersTable.referralCount,
   }).from(usersTable).where(eq(usersTable.userId, userId)).limit(1);
   const attempts = await db.select({
     testId: userHistoryTable.testId, score: userHistoryTable.score, accuracy: userHistoryTable.accuracy,
     correctCount: userHistoryTable.correctCount, wrongCount: userHistoryTable.wrongCount,
-    userAnswers: userHistoryTable.userAnswers,
+    userAnswers: userHistoryTable.userAnswers, completedAt: userHistoryTable.completedAt,
   }).from(userHistoryTable).where(eq(userHistoryTable.userId, userId)).orderBy(desc(userHistoryTable.completedAt)).limit(20);
 
   const testRows = await db.select({
     testId: testSeriesTable.testId,
     testName: testSeriesTable.testName,
     questionsData: testSeriesTable.questionsData,
+    topicTags: testSeriesTable.topicTags,
   }).from(testSeriesTable);
   const testMap = new Map(testRows.map((t) => [t.testId, t]));
   const testGroups = new Map<string, typeof attempts>();
@@ -197,6 +217,7 @@ async function getUserInsights(userId: number): Promise<string> {
       correctCount: userHistoryTable.correctCount,
       wrongCount: userHistoryTable.wrongCount,
       accuracy: userHistoryTable.accuracy,
+      completedAt: userHistoryTable.completedAt,
     }).from(userHistoryTable).where(inArray(userHistoryTable.testId, [...testGroups.keys()]))
     : [];
   const allGroups = new Map<string, typeof allAttempts>();
@@ -227,7 +248,7 @@ async function getUserInsights(userId: number): Promise<string> {
            if (typeof answerIndex !== "number" || answerIndex === question.correctOptionIndex) return [];
            return [`Question: ${String(question.question).slice(0, 260)} | User answer: ${question.options?.[answerIndex] ?? "unknown"} | Correct answer: ${question.options?.[question.correctOptionIndex] ?? "unknown"} | Explanation: ${String(question.explanation ?? "").slice(0, 260)}`];
          });
-       }).slice(0, 40);
+        }).slice(0, 5);
       const sorted = [...population].sort((a, b) => b.score - a.score);
       const band = Math.max(1, Math.ceil(sorted.length * 0.27));
       const accuracyFor = (group: typeof rows) => {
@@ -235,9 +256,33 @@ async function getUserInsights(userId: number): Promise<string> {
         return answered ? group.reduce((sum, row) => sum + row.correctCount, 0) / answered : 0;
       };
       const discrimination = sorted.length >= 4 ? (accuracyFor(sorted.slice(0, band)) - accuracyFor(sorted.slice(-band))) * 100 : null;
-      const indexed = setAnalysisCache.get(testId)?.analysis;
-      const topics = indexed?.topics?.length ? indexed.topics.join(", ") : "not indexed yet";
-       return `Title: ${title}; attempts=${rows.length}; average accuracy=${avg.toFixed(1)}%; best personal score=${rows.reduce((max, row) => Math.max(max, row.score), -Infinity)}; topper score=${topper === -Infinity ? "unknown" : topper}; weak topics from question intelligence=${topics}; weakest question accuracy=${weakQuestionAccuracy === null ? "not enough data" : `${weakQuestionAccuracy.toFixed(1)}%`}; discrimination index=${discrimination === null ? "not reliable yet" : discrimination.toFixed(1)}\nMistakes to coach:\n${mistakes.length ? mistakes.join("\n") : "No recorded mistakes in the available attempts."}`;
+       const topicStats = new Map<string, { correct: number; answered: number }>();
+       for (const row of rows) {
+         const answers = Array.isArray(row.userAnswers) ? row.userAnswers : [];
+         questionData.forEach((question, index) => {
+           const answer = answers[index];
+           if (typeof answer !== "number") return;
+           const topics = Array.isArray(question.topics) && question.topics.length
+             ? question.topics
+             : question.topic ? [question.topic] : [];
+           for (const topic of topics) {
+             const stat = topicStats.get(String(topic)) ?? { correct: 0, answered: 0 };
+             stat.answered++;
+             if (answer === question.correctOptionIndex) stat.correct++;
+             topicStats.set(String(topic), stat);
+           }
+         });
+       }
+       const weakTopics = [...topicStats.entries()]
+         .filter(([, stat]) => stat.answered > 0)
+         .map(([topic, stat]) => ({ topic, accuracy: (stat.correct / stat.answered) * 100, answered: stat.answered }))
+         .sort((a, b) => a.accuracy - b.accuracy)
+         .slice(0, 5)
+         .map((item) => `${item.topic} ${item.accuracy.toFixed(0)}% (${item.answered} answers)`);
+       const topics = testMap.get(testId)?.topicTags?.length
+         ? testMap.get(testId)!.topicTags.join(", ")
+         : "not indexed yet";
+       return `Title: ${title}; attempts=${rows.length}; average accuracy=${avg.toFixed(1)}%; best personal score=${rows.reduce((max, row) => Math.max(max, row.score), -Infinity)}; topper score=${topper === -Infinity ? "unknown" : topper}; indexed topics=${topics}; weak topics=${weakTopics.length ? weakTopics.join(", ") : "not enough tagged answers"}; weakest question accuracy=${weakQuestionAccuracy === null ? "not enough data" : `${weakQuestionAccuracy.toFixed(1)}%`}; discrimination index=${discrimination === null ? "not reliable yet" : discrimination.toFixed(1)}\nMistakes to coach:\n${mistakes.length ? mistakes.join("\n") : "No recorded mistakes in the available attempts."}`;
     }).join("\n")
     : "No completed attempts yet";
   const weak = attempts.length
@@ -246,130 +291,269 @@ async function getUserInsights(userId: number): Promise<string> {
   const strong = attempts.length
     ? attempts.filter((a) => a.accuracy >= 80).map((a) => testMap.get(a.testId)?.testName ?? "Untitled test").slice(0, 5).join(", ")
     : "Not enough data yet";
-  return `Student: ${user?.fullName ?? "Student"} | Plan: ${user?.tier ?? "Free"} | Target: ${user?.targetExamSub ?? "Not set"}\nCompleted test analysis (use titles, not IDs):\n${performance}\nLikely weak sets: ${weak}\nStrong sets: ${strong}`;
+  const percentileValues = attempts.slice(0, 3).map((attempt) => {
+    const population = allGroups.get(attempt.testId) ?? [];
+    if (!population.length) return null;
+    return (population.filter((row) => row.score <= attempt.score).length / population.length) * 100;
+  }).filter((value): value is number => value !== null);
+  const recentThree = attempts.slice(0, 3).map((attempt) => {
+    const title = testMap.get(attempt.testId)?.testName ?? "Untitled test";
+    return `${title}: score ${attempt.score}, accuracy ${attempt.accuracy.toFixed(1)}%, completed ${new Date(attempt.completedAt).toISOString().slice(0, 10)}`;
+  });
+  const premiumStatus = user?.premiumExpiry
+    ? `${user.tier}, expires ${user.premiumExpiry.toISOString().slice(0, 10)}`
+    : user?.tier ?? "Free";
+  return `Student profile:
+Name: ${user?.fullName ?? "Student"}${user?.username ? ` (@${user.username})` : ""}
+Plan: ${premiumStatus}
+Target exam: ${user?.targetExamMain ?? "Not set"} / ${user?.targetExamSub ?? "Not set"}
+Joined: ${user?.joinedAt?.toISOString().slice(0, 10) ?? "unknown"}; total tests recorded: ${user?.totalTestsTaken ?? attempts.length}; referrals: ${user?.referralCount ?? 0}
+Average percentile across last 3 tests: ${percentileValues.length ? `${(percentileValues.reduce((sum, value) => sum + value, 0) / percentileValues.length).toFixed(1)}%` : "not enough population data"}
+Last 3 tests:
+${recentThree.length ? recentThree.join("\n") : "No completed attempts yet"}
+Completed test analysis (use titles, not IDs):
+${performance}
+Likely weak sets: ${weak}
+Strong sets: ${strong}`;
 }
 
 export async function answerAgenticMessage(userId: number, text: string): Promise<string> {
   const insights = await getUserInsights(userId);
-  const testTitles = await db.select({ testId: testSeriesTable.testId, testName: testSeriesTable.testName })
-    .from(testSeriesTable);
-  const titleMap = new Map(testTitles.map((test) => [test.testId, test.testName]));
-  const cached = [...setAnalysisCache.entries()].slice(0, 12)
-    .map(([testId, value]) => {
-      const questionDetails = value.analysis.questions.map((question, index) =>
-        `Q${index + 1} "${question.question}": topics=${question.topics.join(", ") || "unknown"}; skills=${question.skills.join(", ") || "unknown"}; difficulty=${question.difficulty}; focus=${question.focus}`
-      ).join("\n");
-      return `Test title: ${titleMap.get(testId) ?? "Untitled test"}; topics=${value.analysis.topics.join(",")}; focus=${value.analysis.focus}\n${questionDetails}`;
-    }).join("\n");
-  return askOpenRouter([
+  const userAttempts = await db.select({ testId: userHistoryTable.testId })
+    .from(userHistoryTable)
+    .where(eq(userHistoryTable.userId, userId))
+    .orderBy(desc(userHistoryTable.completedAt))
+    .limit(20);
+  const relevantTestIds = [...new Set(userAttempts.map((attempt) => attempt.testId))];
+  const indexedTests = relevantTestIds.length
+    ? await db.select({
+      testId: testSeriesTable.testId,
+      testName: testSeriesTable.testName,
+      topicTags: testSeriesTable.topicTags,
+      questionsData: testSeriesTable.questionsData,
+    }).from(testSeriesTable).where(inArray(testSeriesTable.testId, relevantTestIds))
+    : [];
+  const cached = indexedTests.map((test) => {
+    const questions = Array.isArray(test.questionsData) ? test.questionsData as QuestionAnalysis[] : [];
+    const questionDetails = questions.slice(0, 12).map((question, index) =>
+      `Q${index + 1} "${String(question.question ?? "").slice(0, 180)}": topics=${question.topics.join(", ") || "unknown"}; difficulty=${question.difficulty ?? "unknown"}; focus=${String(question.focus ?? "").slice(0, 180)}`
+    ).join("\n");
+    return `Test title: ${test.testName}; indexed topics=${(test.topicTags ?? []).join(", ") || "not indexed"}\n${questionDetails}`;
+  }).join("\n");
+  const studentContext = `${insights}\nBackground question intelligence:\n${cached || "Still building the question intelligence index."}`.slice(0, 24_000);
+  return askGemini([
       { role: "system", content: `${BOT_AGENT_CONTEXT}
 You are the always-on Agentic AI strategist inside Series TestPro. You can act as a tutor, performance analyst, study planner, practice-set designer, revision coach, and exam accountability partner.
 Use the student's real context below. Be personal and actionable. If asked to do work, do it directly in the response. Never claim an action happened if it did not. Keep responses under 350 words, plain text, readable in Telegram.
 Never show internal test IDs to the user. Use test titles. Report average accuracy, weak topics, strong topics, topper score, and discrimination index only when available in the context; otherwise say that data is insufficient.
 You have access to question-level intelligence and the student's answer arrays. When a question was answered incorrectly, identify the question by its text/short title, explain the likely mistake, and recommend a correction. Never reveal an internal question ID or test ID.
 Student context:
-${insights}
-Background question intelligence:
-${cached || "Still building the question intelligence index."}` },
+${studentContext}` },
     { role: "user", content: text.slice(0, 5000) },
-  ], { maxTokens: 8192, temperature: 0.4 });
+  ], { maxTokens: 4096, temperature: 0.4 });
 }
 
 export async function agenticInsights(userId: number): Promise<string> {
   return answerAgenticMessage(userId, "Give me a concise personal dashboard: my weak areas, strong areas, recent trend, and the best next 3 actions.");
 }
 
-async function analyzeTestSet(test: { testId: string; testName: string; questionsData: unknown }): Promise<void> {
-  const questions = Array.isArray(test.questionsData) ? test.questionsData : [];
-  if (!questions.length) return;
-  const prompt = questions.map((q: any, i) => `Q${i + 1}: ${q.question}\nOptions: ${(q.options ?? []).join(" | ")}\nExplanation: ${q.explanation ?? ""}`).join("\n\n");
-  const raw = await askOpenRouter([
-    { role: "system", content: `Extract exam intelligence for the complete question set. Return JSON with:
-topics (array max 8), skills (array max 8), difficulty (easy/medium/hard), focus (one sentence),
-questions (one object for EVERY input question, in the same order, with question (short label), topics (array max 3), skills (array max 3), difficulty, focus).
-Do not solve questions and do not omit any question.` },
-    { role: "user", content: `Test: ${test.testName}\n${prompt}` },
-  ], { json: true, maxTokens: 8192 });
-  const parsed = JSON.parse(raw) as Partial<SetAnalysis>;
-  const questionInsights = Array.isArray(parsed.questions) ? parsed.questions : [];
-  setAnalysisCache.set(test.testId, {
-    analysis: {
-      topics: Array.isArray(parsed.topics) ? parsed.topics.slice(0, 8).map(String) : [],
-      skills: Array.isArray(parsed.skills) ? parsed.skills.slice(0, 8).map(String) : [],
-      difficulty: String(parsed.difficulty ?? "medium"),
-      focus: String(parsed.focus ?? "Mixed exam practice"),
-      questions: questionInsights.map((item) => ({
-        question: String(item.question ?? ""),
-        topics: Array.isArray(item.topics) ? item.topics.slice(0, 3).map(String) : [],
-        skills: Array.isArray(item.skills) ? item.skills.slice(0, 3).map(String) : [],
-        difficulty: String(item.difficulty ?? "medium"),
-        focus: String(item.focus ?? ""),
-      })),
-    },
-    updatedAt: Date.now(),
-  });
+async function loadSubjectTopics(subject: string): Promise<string[]> {
+  const raw = await getConfig("subjects");
+  let taxonomy = DEFAULT_SUBJECTS;
+  if (raw) {
+    try {
+      taxonomy = JSON.parse(raw) as Record<string, string[]>;
+    } catch {
+      taxonomy = DEFAULT_SUBJECTS;
+    }
+  }
+  const subjectTopics = Array.isArray(taxonomy[subject]) ? taxonomy[subject] : [];
+  const allowed = subjectTopics.length ? subjectTopics : Object.values(taxonomy).flat();
+  const result = [...new Set(allowed.map((topic) => String(topic).trim()).filter(Boolean))];
+  return result.length ? result : ["General"];
+}
+
+function canonicalTopic(value: unknown, allowedTopics: string[]): string | null {
+  const text = String(value ?? "").trim().toLowerCase();
+  return allowedTopics.find((topic) => topic.toLowerCase() === text) ?? null;
+}
+
+function normalizeDifficulty(value: unknown): "easy" | "medium" | "hard" {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (text === "easy") return "easy";
+  if (text === "hard" || text === "very hard") return "hard";
+  return "medium";
+}
+
+async function analyzeTestSet(test: {
+  testId: string;
+  testName: string;
+  subject: string;
+  subSubject: string;
+  questionsData: unknown;
+}, allowedTopics: string[]): Promise<void> {
+  const sourceQuestions = Array.isArray(test.questionsData) ? test.questionsData as any[] : [];
+  if (!sourceQuestions.length) throw new Error("Test has no questions to tag");
+  const taggedQuestions = [...sourceQuestions];
+  const pending = taggedQuestions
+    .map((question, index) => ({ question, index }))
+    .filter(({ question }) =>
+      question.topicTagVersion !== TOPIC_TAGGING_VERSION ||
+      !allowedTopics.some((topic) => topic.toLowerCase() === String(question.topic ?? "").toLowerCase())
+    );
+
+  for (let start = 0; start < pending.length; start += 50) {
+    const elapsed = lastTagRequestAt ? Date.now() - lastTagRequestAt : TAG_REQUEST_MIN_INTERVAL_MS;
+    const waitMs = Math.max(0, TAG_REQUEST_MIN_INTERVAL_MS - elapsed);
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    lastTagRequestAt = Date.now();
+    const batch = pending.slice(start, start + 50);
+    const prompt = batch.map(({ question, index }) =>
+      `INDEX ${index + 1}\nQuestion: ${String(question.question ?? "").slice(0, 700)}\nOptions: ${(question.options ?? []).join(" | ")}\nExplanation: ${String(question.explanation ?? "").slice(0, 500)}`
+    ).join("\n\n");
+    const raw = await askGemini([
+      { role: "system", content: `You tag Indian competitive-exam questions. Use ONLY one topic from this canonical list: ${allowedTopics.join(", ")}.
+Return JSON only: {"questions":[{"index":1,"topic":"Canonical topic","difficulty":"easy|medium|hard","focus":"one short sentence"}]}.
+Return exactly one item for every input question, preserve each supplied INDEX, never invent a topic, and do not solve the question.` },
+      { role: "user", content: `Test: ${test.testName}\nSubject: ${test.subject}\nSub-subject: ${test.subSubject}\n${prompt}` },
+    ], { json: true, maxTokens: 4096, temperature: 0.1 });
+    const parsed = JSON.parse(raw) as {
+      questions?: Array<{ index?: number; topic?: string; difficulty?: string; focus?: string }>;
+    };
+    const returnedQuestions = Array.isArray(parsed.questions) ? parsed.questions : [];
+    const byIndex = new Map(returnedQuestions.map((item) => [Number(item.index), item]));
+    if (byIndex.size !== batch.length || batch.some(({ index }) => !byIndex.has(index + 1))) {
+      throw new Error("Gemini returned incomplete question tags; this test will be retried later.");
+    }
+    batch.forEach(({ question, index }) => {
+      const item = byIndex.get(index + 1);
+      const topic = canonicalTopic(item?.topic, allowedTopics);
+      if (!topic) {
+        throw new Error("Gemini returned a topic outside the Subject Library taxonomy; this test will be retried later.");
+      }
+      taggedQuestions[index] = {
+        ...question,
+        topic,
+        topics: [topic],
+        skills: [],
+        difficulty: normalizeDifficulty(item?.difficulty),
+        focus: String(item?.focus ?? "").slice(0, 220),
+        topicTagVersion: TOPIC_TAGGING_VERSION,
+      };
+    });
+    // Persist each completed batch so retries after a quota or network error
+    // only spend another request on questions that were not tagged yet.
+    await db.update(testSeriesTable).set({ questionsData: taggedQuestions })
+      .where(eq(testSeriesTable.testId, test.testId));
+  }
+
+  if (taggedQuestions.some((question) =>
+    question.topicTagVersion !== TOPIC_TAGGING_VERSION ||
+    !allowedTopics.some((topic) => topic.toLowerCase() === String(question.topic ?? "").toLowerCase())
+  )) {
+    throw new Error("Some questions remain untagged; this test will be retried later.");
+  }
+  const topicTags = [...new Set(taggedQuestions.map((question) => String(question.topic)))];
+  await db.update(testSeriesTable).set({
+    questionsData: taggedQuestions,
+    topicTags,
+    topicTaggedAt: new Date(),
+    topicTaggingVersion: TOPIC_TAGGING_VERSION,
+  }).where(eq(testSeriesTable.testId, test.testId));
 }
 
 export async function runAgenticAnalysis(): Promise<void> {
   if (analysisRunning) return;
+  if (Date.now() < analysisQuotaBlockedUntil) {
+    lastError = "Gemini quota cooldown active; try again after the cooldown.";
+    return;
+  }
   analysisRunning = true;
   lastRunAt = Date.now();
   lastError = null;
   try {
-    const tests = await db.select({ testId: testSeriesTable.testId, testName: testSeriesTable.testName, questionsData: testSeriesTable.questionsData })
+    const tests = await db.select({
+      testId: testSeriesTable.testId,
+      testName: testSeriesTable.testName,
+      subject: testSeriesTable.subject,
+      subSubject: testSeriesTable.subSubject,
+      questionsData: testSeriesTable.questionsData,
+      topicTags: testSeriesTable.topicTags,
+      topicTaggedAt: testSeriesTable.topicTaggedAt,
+    })
       .from(testSeriesTable).where(eq(testSeriesTable.isActive, true));
     let analyzedSets = 0;
     let analyzedQuestions = 0;
     for (const test of tests) {
-      const cached = setAnalysisCache.get(test.testId);
-      if (cached && Date.now() - cached.updatedAt < 6 * 60 * 60 * 1000) continue;
+      if (test.topicTaggedAt || test.topicTags.length > 0) continue;
       try {
-        await analyzeTestSet(test);
+        const allowedTopics = await loadSubjectTopics(test.subject);
+        await analyzeTestSet(test, allowedTopics);
         analyzedSets++;
         analyzedQuestions += Array.isArray(test.questionsData) ? test.questionsData.length : 0;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
         logger.warn({ error, testId: test.testId }, "Agentic set analysis failed");
+        if (/429|quota|resource_exhausted|rate limit/i.test(lastError)) {
+          analysisQuotaBlockedUntil = Date.now() + 60_000;
+          break;
+        }
       }
     }
     lastRunStats = { sets: analyzedSets, questions: analyzedQuestions };
     lastCompletedAt = Date.now();
+  } catch (error) {
+    lastError = error instanceof Error ? error.message : String(error);
+    logger.error({ error }, "Agentic analysis run failed");
   } finally {
     analysisRunning = false;
   }
 }
 
-export function getAgenticAnalysisStatus() {
-  const sets = [...setAnalysisCache.entries()].map(([testId, item]) => ({
-    testId,
-    updatedAt: new Date(item.updatedAt).toISOString(),
-    topics: item.analysis.topics,
-    skills: item.analysis.skills,
-    difficulty: item.analysis.difficulty,
-    focus: item.analysis.focus,
-    questionCount: item.analysis.questions.length,
-    questions: item.analysis.questions,
-  }));
+export async function getAgenticAnalysisStatus() {
+  const tests = await db.select({
+    testId: testSeriesTable.testId,
+    testName: testSeriesTable.testName,
+    topicTags: testSeriesTable.topicTags,
+    topicTaggedAt: testSeriesTable.topicTaggedAt,
+    questionsData: testSeriesTable.questionsData,
+  }).from(testSeriesTable).where(eq(testSeriesTable.isActive, true));
+  const sets = tests.filter((test) => test.topicTaggedAt || test.topicTags.length > 0).map((test) => {
+    const questions = Array.isArray(test.questionsData) ? test.questionsData as any[] : [];
+    return {
+      testId: test.testId,
+      testName: test.testName,
+      updatedAt: test.topicTaggedAt?.toISOString() ?? null,
+      topics: test.topicTags,
+      skills: [],
+      difficulty: questions.some((question) => question.difficulty === "hard") ? "hard" : "medium",
+      focus: "Questions tagged against the configured subject topic library.",
+      questionCount: questions.length,
+      questions: questions.map((question) => ({
+        question: String(question.question ?? "").slice(0, 180),
+        topics: Array.isArray(question.topics) ? question.topics : question.topic ? [question.topic] : [],
+        skills: Array.isArray(question.skills) ? question.skills : [],
+        difficulty: String(question.difficulty ?? "medium"),
+        focus: String(question.focus ?? ""),
+      })),
+    };
+  });
   return {
     running: analysisRunning,
     lastRunAt: lastRunAt ? new Date(lastRunAt).toISOString() : null,
     lastCompletedAt: lastCompletedAt ? new Date(lastCompletedAt).toISOString() : null,
     lastError,
     lastRunStats,
+    activeSets: tests.length,
     analyzedSets: sets.length,
+    pendingSets: Math.max(0, tests.length - sets.length),
     analyzedQuestions: sets.reduce((sum, set) => sum + set.questionCount, 0),
     sets,
   };
 }
 
 export function startAgenticAnalysisScheduler(): void {
-  logger.info("Agentic AI 24/7 analysis scheduler started");
-  void runAgenticAnalysis()
-    .then(() => logger.info("Agentic AI initial question analysis completed"))
-    .catch((error) => logger.warn({ error }, "Initial agentic analysis failed"));
-  setInterval(() => void runAgenticAnalysis()
-    .then(() => logger.info("Agentic AI question analysis cycle completed"))
-    .catch((error) => logger.warn({ error }, "Agentic analysis cycle failed")), 15 * 60 * 1000);
+  logger.info("Agentic AI scheduler ready; Smart Intelligence runs only when an admin presses Run now");
 }
 
 export { deleteTrackedAgenticMessages };

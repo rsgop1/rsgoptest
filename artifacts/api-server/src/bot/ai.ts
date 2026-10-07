@@ -28,6 +28,90 @@ ${BOT_FUNCTIONS_MANUAL}
 
 Use the manual as product truth, but use live database context as truth for personal metrics.`;
 
+const GEMINI_MODEL = process.env["GEMINI_MODEL"] ?? "gemini-2.5-flash";
+const GROQ_MODEL = process.env["GROQ_MODEL"] ?? "llama-3.3-70b-versatile";
+
+function toGeminiContents(messages: ChatMessage[]) {
+  return messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role === "assistant" ? "model" : "user",
+      parts: typeof message.content === "string"
+        ? [{ text: message.content }]
+        : message.content.map((part) => part.type === "text"
+          ? { text: part.text }
+          : {
+            inlineData: {
+              mimeType: part.image_url.url.match(/^data:([^;]+);/)?.[1] ?? "image/png",
+              data: part.image_url.url.split(",")[1] ?? "",
+            },
+          }),
+    }));
+}
+
+export async function askGemini(
+  messages: ChatMessage[],
+  options: { temperature?: number; maxTokens?: number; json?: boolean } = {},
+): Promise<string> {
+  const apiKey = process.env["GEMINI_API_KEY"] ?? process.env["GOOGLE_API_KEY"];
+  if (!apiKey) throw new Error("Gemini AI is not configured");
+
+  const system = messages.find((message) => message.role === "system")?.content;
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: system ? { parts: [{ text: String(system) }] } : undefined,
+        contents: toGeminiContents(messages),
+        generationConfig: {
+          temperature: options.temperature ?? 0.3,
+          maxOutputTokens: options.maxTokens ?? 8192,
+          ...(options.json ? { responseMimeType: "application/json" } : {}),
+        },
+      }),
+    },
+  );
+  const data = await response.json() as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    error?: { message?: string };
+  };
+  if (!response.ok || data.error) {
+    logger.error({ status: response.status, error: data.error }, "Gemini request failed");
+    throw new Error(data.error?.message ?? `Gemini request failed: ${response.status}`);
+  }
+  return data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim() ?? "";
+}
+
+export async function askGroq(
+  messages: ChatMessage[],
+  options: { temperature?: number; maxTokens?: number; json?: boolean } = {},
+): Promise<string> {
+  const apiKey = process.env["GROQ_API_KEY"];
+  if (!apiKey) throw new Error("Groq AI is not configured");
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages,
+      temperature: options.temperature ?? 0.3,
+      max_tokens: options.maxTokens ?? 2048,
+      ...(options.json ? { response_format: { type: "json_object" } } : {}),
+    }),
+  });
+  const data = await response.json() as {
+    choices?: Array<{ message?: { content?: string } }>;
+    error?: { message?: string };
+  };
+  if (!response.ok || data.error) {
+    logger.error({ status: response.status, error: data.error }, "Groq request failed");
+    throw new Error(data.error?.message ?? `Groq request failed: ${response.status}`);
+  }
+  return data.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
 export async function askOpenRouter(
   messages: ChatMessage[],
   options: { temperature?: number; maxTokens?: number; json?: boolean } = {},
@@ -101,6 +185,21 @@ export async function askOpenRouterVision(
     ...imageDataUrls.map((url) => ({ type: "image_url" as const, image_url: { url } })),
   ];
   return askOpenRouter([
+    { role: "system", content: "You are a careful document OCR specialist. Transcribe only visible content, preserve equations, names, dates, tables and answer choices, and mark unreadable words as [unclear]. Do not invent missing text." },
+    { role: "user", content },
+  ], { ...options, temperature: options.temperature ?? 0.1 });
+}
+
+export async function askGeminiVision(
+  prompt: string,
+  imageDataUrls: string[],
+  options: { temperature?: number; maxTokens?: number } = {},
+): Promise<string> {
+  const content: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+    { type: "text", text: prompt },
+    ...imageDataUrls.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+  ];
+  return askGemini([
     { role: "system", content: "You are a careful document OCR specialist. Transcribe only visible content, preserve equations, names, dates, tables and answer choices, and mark unreadable words as [unclear]. Do not invent missing text." },
     { role: "user", content },
   ], { ...options, temperature: options.temperature ?? 0.1 });
